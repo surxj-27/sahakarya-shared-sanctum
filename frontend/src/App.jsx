@@ -1,22 +1,39 @@
 import { useState , useEffect, useRef, useCallback} from 'react'
+import { toPng } from "html-to-image";
 import heroImg from './assets/hero.png'
 import reactLogo from './assets/react.svg'
 import viteLogo from './assets/vite.svg'
 import './App.css'
 import Header from "./components/Header"
 import Toolbar from "./components/Toolbar"
+import DrawingLayer from "./components/DrawingLayer"
+import StickyNote from "./components/StickyNote"
+import TextItem from "./components/TextItem"
+import SelectionOverlay from "./components/SelectionOverlay"
 import useHistory  from './hooks/useHistory'
 
 function App() {
-  
- 
-  const [draggingNote,setDraggingNote]=useState(null)
-  const boardHistory=useHistory({
+  function getInitialBoardState() {
+  try {
+    const saved = localStorage.getItem("sanctum-board");
+
+    if (saved) {
+      return JSON.parse(saved);
+    }
+  } catch (error) {
+    console.error("Failed to load saved board:", error);
+  }
+
+  return {
     notes: [],
     strokes: [],
     shapes: [],
     textItems: [],
-  })
+  };
+}
+ 
+  const [draggingNote,setDraggingNote]=useState(null)
+ const boardHistory = useHistory(getInitialBoardState());
   const { notes, strokes, shapes, textItems } = boardHistory.state
   const updateCollection = useCallback((key, nextValue, record = true) => {
     const update = record ? boardHistory.set : boardHistory.update
@@ -50,6 +67,7 @@ const [selectedObject, setSelectedObject] = useState(null);
 
 const [dragStart, setDragStart] = useState(null);
 const canvasRef = useRef(null);
+const [saveStatus, setSaveStatus] = useState("Saved");
 
 function getCanvasPoint(event, canvas = event.currentTarget) {
   const rect = canvas.getBoundingClientRect();
@@ -142,6 +160,23 @@ function getObjectBounds(object) {
   return null;
 }
 
+
+useEffect(() => {
+  setSaveStatus("Saving...");
+
+  try {
+    localStorage.setItem(
+      "sanctum-board",
+      JSON.stringify(boardHistory.state)
+    );
+
+    setSaveStatus("Saved");
+  } catch (error) {
+    console.error("Autosave failed:", error);
+    setSaveStatus("Save failed");
+  }
+}, [boardHistory.state]);
+
 useEffect(() => {
   const canvas = canvasRef.current;
   if (!canvas) return;
@@ -169,6 +204,26 @@ useEffect(() => {
   canvas.addEventListener("wheel", handleWheel, { passive: false });
   return () => canvas.removeEventListener("wheel", handleWheel);
 }, [pan, zoom]);
+
+async function exportBoardAsPng() {
+  const board = canvasRef.current;
+  if (!board) return;
+
+  try {
+    const dataUrl = await toPng(board, {
+      cacheBust: true,
+      pixelRatio: 2,
+    });
+
+    const link = document.createElement("a");
+    link.download = "shared-sanctum.png";
+    link.href = dataUrl;
+    link.click();
+  } catch (error) {
+    console.error("PNG export failed:", error);
+  }
+}
+
 
   function createNote(){
     const newNote={
@@ -211,6 +266,8 @@ return (
   canUndo={canUndo}
   canRedo={canRedo}
   onAllClear={clearBoard}
+  saveStatus={saveStatus}
+  onExport={exportBoardAsPng}
 />
   <main ref={canvasRef} className='relative h-[calc(100vh-70px)] bg-[#171820] overflow-hidden' style={{
     backgroundImage:"radial-gradient(#383945 1px,transparent 1px)",
@@ -642,298 +699,81 @@ if (
     transformOrigin: "0 0",
   }}
 >  
-    <svg className='pointer-events-none absolute inset-0 z-10 h-full w-full'>
-      {
-        strokes.map((stroke,index)=>(
-          <polyline
-          key={stroke.id ?? index}
-          points={stroke.points.map((point)=> `${point.x},${point.y}`).join(" ")}
-          fill="none"
-          stroke='white'
-          strokeWidth="3"
-          strokeLinecap='round'
-          strokeLinejoin='round'
-          />
-        ))
-      }
-   {shapes.map((shape) => {
-  const startX = shape.startX ?? shape.x;
-  const startY = shape.startY ?? shape.y;
-  const endX = shape.endX ?? shape.x + shape.width;
-  const endY = shape.endY ?? shape.y + shape.height;
-
-if (shape.type === "arrow") {
-  const angle = Math.atan2(endY - startY, endX - startX);
-  const headLength = 14;
-  const headAngle = Math.PI / 6;
-
-  const x1 =
-    endX - headLength * Math.cos(angle - headAngle);
-  const y1 =
-    endY - headLength * Math.sin(angle - headAngle);
-
-  const x2 =
-    endX - headLength * Math.cos(angle + headAngle);
-  const y2 =
-    endY - headLength * Math.sin(angle + headAngle);
-
-  return (
-    <g key={shape.id}>
-      <line
-        x1={startX}
-        y1={startY}
-        x2={endX}
-        y2={endY}
-        stroke="white"
-        strokeWidth="2"
-        strokeLinecap="round"
-      />
-      <polygon
-        points={`${endX},${endY} ${x1},${y1} ${x2},${y2}`}
-        fill="white"
-        stroke="white"
-        strokeWidth="1"
-        strokeLinejoin="round"
-      />
-    </g>
-  );
-}
-
-
-  if (shape.type === "circle") {
-    return (
-      <ellipse
-        key={shape.id}
-        cx={shape.x + shape.width / 2}
-        cy={shape.y + shape.height / 2}
-        rx={shape.width / 2}
-        ry={shape.height / 2}
-        fill="transparent"
-        stroke="white"
-        strokeWidth="2"
-      />
-    );
-  }
-
-  return (
-    <rect
-      key={shape.id}
-      x={shape.x}
-      y={shape.y}
-      width={shape.width}
-      height={shape.height}
-      fill="transparent"
-      stroke="white"
-      strokeWidth="2"
-    />
-  );
-})}
-    </svg>
-    {
-      notes.map((note)=>(
-        <div  key={note.id}
-        onMouseDown={() => {
+    <DrawingLayer strokes={strokes} shapes={shapes} />
+    {notes.map((note) => (
+      <StickyNote
+        key={note.id}
+        note={note}
+        onBeginDrag={() => {
           boardHistory.beginTransaction();
           setDraggingNote(note.id);
         }}
-         className={`sticky-note absolute z-20 w-48 rounded-lg ${note.color} p-4 text-gray-900 shadow-lg`}
-          style={{
-            left: `${note.x}px`,
-            top: `${note.y}px`,
-            width: note.width ? `${note.width}px` : undefined,
-            height: note.height ? `${note.height}px` : undefined,
-          }}>
-            <textarea 
-           onMouseDown={(e) => {
-  e.stopPropagation();
-
-  if (activeTool === "select") {
-    e.preventDefault();
-    e.currentTarget.blur();
-    boardHistory.beginTransaction();
-    const { x: mouseX, y: mouseY } = getCanvasPoint(
-      e,
-      e.currentTarget.closest("main")
-    );
-
-    setSelectedObject({
-      type: "note",
-      id: note.id,
-    });
-
-    setDragStart({
-      mode: "move",
-      mouseX,
-      mouseY,
-      object: note,
-    });
-  } else {
-    boardHistory.beginTransaction();
-    setDraggingNote(note.id);
-  }
-}}
-            value={note.text}
-            onChange={
-              (e)=>{
-                  setNotes(
-                    notes.map((n) =>
-                      n.id === note.id ? { ...n, text: e.target.value } : n
-                    )
-                  )
-              }
-            }
-            className='h-28 w-full resize-none bg-transparent text-gray-900 outline-none'
-            placeholder='Write something....'
-            />
-            
-<div className="mb-2 flex gap-2">
-  <button
-    onMouseDown={(e) => e.stopPropagation()}
-    onClick={() => {
-      setNotes((prevNotes) =>
-        prevNotes.map((n) =>
-          n.id === note.id
-            ? { ...n, color: "bg-yellow-200" }
-            : n
-        )
-      );
-    }}
-    className="h-5 w-5 rounded-full bg-yellow-200"
-  />
-
-  <button
-    onMouseDown={(e) => e.stopPropagation()}
-    onClick={() => {
-      setNotes((prevNotes) =>
-        prevNotes.map((n) =>
-          n.id === note.id
-            ? { ...n, color: "bg-pink-300" }
-            : n
-        )
-      );
-    }}
-    className="h-5 w-5 rounded-full bg-pink-300"
-  />
-
-  <button
-    onMouseDown={(e) => e.stopPropagation()}
-    onClick={() => {
-      setNotes((prevNotes) =>
-        prevNotes.map((n) =>
-          n.id === note.id
-            ? { ...n, color: "bg-blue-200" }
-            : n
-        )
-      );
-    }}
-    className="h-5 w-5 rounded-full bg-blue-200"
-  />
-
-  <button
-    onMouseDown={(e) => e.stopPropagation()}
-    onClick={() => {
-      setNotes((prevNotes) =>
-        prevNotes.map((n) =>
-          n.id === note.id
-            ? { ...n, color: "bg-green-200" }
-            : n
-        )
-      );
-    }}
-    className="h-5 w-5 rounded-full bg-green-200"
-  />
-</div>
-
-            <button onMouseDown={(e)=> e.stopPropagation()}
-            onClick={()=>{
-              deleteNote(note.id)
-            }}
-            className='mt-2 rounded bg-red-500 px-3 py-1 text-sm text-white hover:bg-red-600'
-            >Delete</button>
-        </div>
-      ))
-    }
+        onTextMouseDown={(event) => {
+          if (activeTool === "select") {
+            event.preventDefault();
+            event.currentTarget.blur();
+            boardHistory.beginTransaction();
+            const { x: mouseX, y: mouseY } = getCanvasPoint(
+              event,
+              event.currentTarget.closest("main")
+            );
+            setSelectedObject({ type: "note", id: note.id });
+            setDragStart({ mode: "move", mouseX, mouseY, object: note });
+          } else {
+            boardHistory.beginTransaction();
+            setDraggingNote(note.id);
+          }
+        }}
+        onTextChange={(text) => setNotes((previous) =>
+          previous.map((item) =>
+            item.id === note.id ? { ...item, text } : item
+          )
+        )}
+        onColorChange={(color) => setNotes((previous) =>
+          previous.map((item) =>
+            item.id === note.id ? { ...item, color } : item
+          )
+        )}
+        onDelete={() => deleteNote(note.id)}
+      />
+    ))}
     {textItems.map((item) => (
-  <textarea
-  
-    key={item.id}
-    value={item.text}
-    onChange={(e) => {
-      setTextItems((prev) =>
-        prev.map((t) =>
-          t.id === item.id
-            ? { ...t, text: e.target.value }
-            : t
-        )
-      );
-    }}
-onMouseDown={(e) => {
-  e.stopPropagation();
-  boardHistory.beginTransaction();
-  setDraggingText(item.id);
-  if (activeTool === "select") {
-    e.preventDefault();
-    e.currentTarget.blur();
-    const { x: mouseX, y: mouseY } = getCanvasPoint(
-      e,
-      e.currentTarget.closest("main")
-    );
-    setSelectedObject({ type: "text", id: item.id });
-    setDragStart({
-      mode: "move",
-      mouseX,
-      mouseY,
-      object: item,
-    });
-  } else {
-    setSelectedObject(null);
-    setDragStart(null);
-  }
-}}
-    placeholder="Type here..."
-    className="absolute z-20 min-w-40 resize bg-transparent text-white outline-none"
-    style={{
-      left: `${item.x}px`,
-      top: `${item.y}px`,
-      width: item.width ? `${item.width}px` : undefined,
-      height: item.height ? `${item.height}px` : undefined,
-    }}
-  />
-))}
-    {selectedObject && (() => {
-      const bounds = getObjectBounds(selectedObject);
-      if (!bounds) return null;
-      const canResize = selectedObject.type === "note" ||
-        selectedObject.type === "text" ||
-        (selectedObject.type === "shape" &&
-          shapes.find((shape) => shape.id === selectedObject.id)?.type !== "arrow");
-
-      return (
-        <div
-          className="pointer-events-none absolute z-30 border border-violet-400/80"
-          style={{
-            left: `${bounds.x}px`,
-            top: `${bounds.y}px`,
-            width: `${bounds.width}px`,
-            height: `${bounds.height}px`,
-          }}
-        >
-          {canResize && ["nw", "ne", "sw", "se"].map((handle) => (
-            <span
-              key={handle}
-              data-resize-handle={handle}
-              className="pointer-events-auto absolute h-2.5 w-2.5 rounded-sm border border-violet-300 bg-[#171820] cursor-nwse-resize"
-              style={{
-                left: handle.includes("w") ? "-5px" : undefined,
-                right: handle.includes("e") ? "-5px" : undefined,
-                top: handle.includes("n") ? "-5px" : undefined,
-                bottom: handle.includes("s") ? "-5px" : undefined,
-              }}
-            />
-          ))}
-        </div>
-      );
-    })()}
+      <TextItem
+        key={item.id}
+        item={item}
+        onChange={(text) => setTextItems((previous) =>
+          previous.map((entry) =>
+            entry.id === item.id ? { ...entry, text } : entry
+          )
+        )}
+        onMouseDown={(event) => {
+          boardHistory.beginTransaction();
+          setDraggingText(item.id);
+          if (activeTool === "select") {
+            event.preventDefault();
+            event.currentTarget.blur();
+            const { x: mouseX, y: mouseY } = getCanvasPoint(
+              event,
+              event.currentTarget.closest("main")
+            );
+            setSelectedObject({ type: "text", id: item.id });
+            setDragStart({ mode: "move", mouseX, mouseY, object: item });
+          } else {
+            setSelectedObject(null);
+            setDragStart(null);
+          }
+        }}
+      />
+    ))}
+    <SelectionOverlay
+      bounds={selectedObject ? getObjectBounds(selectedObject) : null}
+      canResize={
+        selectedObject?.type === "note" ||
+        selectedObject?.type === "text" ||
+        (selectedObject?.type === "shape" &&
+          shapes.find((shape) => shape.id === selectedObject.id)?.type !== "arrow")
+      }
+    />
     </div>
   </main>
 

@@ -1,0 +1,22 @@
+function TextItem({ item, onMouseDown, onChange }) {
+  return (
+    <textarea
+      value={item.text}
+      onChange={(event) => onChange(event.target.value)}
+      onMouseDown={(event) => {
+        event.stopPropagation();
+        onMouseDown(event);
+      }}
+      placeholder="Type here..."
+      className="absolute z-20 min-w-40 resize bg-transparent text-white outline-none"
+      style={{
+        left: `${item.x}px`,
+        top: `${item.y}px`,
+        width: item.width ? `${item.width}px` : undefined,
+        height: item.height ? `${item.height}px` : undefined,
+      }}
+    />
+  );
+}
+
+export default TextItem;
