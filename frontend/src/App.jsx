@@ -1,4 +1,5 @@
 import { useState , useEffect, useRef, useCallback} from 'react'
+import socket from "./socket";
 import { toPng } from "html-to-image";
 import heroImg from './assets/hero.png'
 import reactLogo from './assets/react.svg'
@@ -60,6 +61,24 @@ useEffect(() => {
 
   verifyToken();
 }, []);
+useEffect(() => {
+  socket.connect();
+
+  socket.on("connect", () => {
+    console.log("Connected to server:", socket.id);
+  });
+
+  socket.on("disconnect", () => {
+    console.log("Disconnected from server");
+  });
+
+  return () => {
+    socket.off("connect");
+    socket.off("disconnect");
+    socket.disconnect();
+  };
+}, []);
+
   function getInitialBoardState() {
   try {
     const saved = localStorage.getItem("sanctum-board");
@@ -97,6 +116,35 @@ useEffect(() => {
   const updateStrokes = useCallback((nextStrokes) => updateCollection("strokes", nextStrokes, false), [updateCollection])
   const updateShapes = useCallback((nextShapes) => updateCollection("shapes", nextShapes, false), [updateCollection])
   const updateTextItems = useCallback((nextTextItems) => updateCollection("textItems", nextTextItems, false), [updateCollection])
+  useEffect(() => {
+  function handleDrawing(data) {
+    if (data.type === "start") {
+      updateStrokes((prev) => [
+        ...prev,
+        data.stroke,
+      ]);
+    }
+
+    if (data.type === "point") {
+      updateStrokes((prev) =>
+        prev.map((stroke) =>
+          stroke.id === data.strokeId
+            ? {
+                ...stroke,
+                points: [...stroke.points, data.point],
+              }
+            : stroke
+        )
+      );
+    }
+  }
+
+  socket.on("drawing", handleDrawing);
+
+  return () => {
+    socket.off("drawing", handleDrawing);
+  };
+}, [updateStrokes]);
   const undo=boardHistory.undo
   const redo=boardHistory.redo
   const canUndo=boardHistory.canUndo
@@ -115,6 +163,7 @@ const [selectedObject, setSelectedObject] = useState(null);
 const [dragStart, setDragStart] = useState(null);
 const canvasRef = useRef(null);
 const [saveStatus, setSaveStatus] = useState("Saved");
+const currentStrokeIdRef = useRef(null);
 
 function getCanvasPoint(event, canvas = event.currentTarget) {
   const rect = canvas.getBoundingClientRect();
@@ -518,11 +567,25 @@ if (clickedNote) {
   if (activeTool !== "pen") return;
   if (e.target.closest(".sticky-note")) return;
       if (e.target.closest("textarea, button")) return;
+const point = getCanvasPoint(e);
 
-  const point = getCanvasPoint(e);
-      boardHistory.beginTransaction();
-      setIsDrawing(true);
+const newStroke = {
+  id: `${socket.id}-${Date.now()}-${Math.random()}`,
+  points: [point],
+};
 
+currentStrokeIdRef.current = newStroke.id;
+
+boardHistory.beginTransaction();
+setIsDrawing(true);
+
+updateStrokes((prev) => [...prev, newStroke]);
+console.log("Sending drawing:", newStroke);
+socket.emit("drawing", {
+  
+  type: "start",
+  stroke: newStroke,
+});
       updateStrokes((prev) => [
     ...prev,
     {
@@ -677,24 +740,31 @@ if (
     })
   );
   return;
-}
-  if(activeTool=="pen" && isDrawing){
-    const point = getCanvasPoint(e);
-    updateStrokes((prev)=>{
-      const updated=[...prev]
-      const lastStroke=updated[updated.length-1]
+}if (activeTool === "pen" && isDrawing) {
+  const point = getCanvasPoint(e);
 
-      updated[updated.length-1]={
-        ...lastStroke,
-        points:[
-          ...lastStroke.points,
-          point,
-        ],
-      }
-      return updated
-    })
-    return
-  }
+  updateStrokes((prev) => {
+    const updated = [...prev];
+    const lastStroke = updated[updated.length - 1];
+
+    if (!lastStroke) return prev;
+
+    updated[updated.length - 1] = {
+      ...lastStroke,
+      points: [...lastStroke.points, point],
+    };
+
+    return updated;
+  });
+console.log("Sending point");
+  socket.emit("drawing", {
+    type: "point",
+    strokeId: currentStrokeIdRef.current,
+    point,
+  });
+
+  return;
+}
   if (draggingText !== null) {
   updateTextItems((prev) =>
     prev.map((item) =>
@@ -746,6 +816,7 @@ if (
     setDraggingText(null);
     setIsDrawing(false)
     setDraggingNote(null)
+    currentStrokeIdRef.current = null;
   }}
   >
     <div className='fixed left-5 top-32 z-10'>
