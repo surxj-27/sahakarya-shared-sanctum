@@ -11,8 +11,13 @@ import StickyNote from "./components/StickyNote"
 import TextItem from "./components/TextItem"
 import SelectionOverlay from "./components/SelectionOverlay"
 import useHistory  from './hooks/useHistory'
+import Login from "./pages/Login";
+import Signup from "./pages/Signup";
 
 function App() {
+  const [authPage, setAuthPage] = useState(() => {
+  return localStorage.getItem("token") ? "board" : "login";
+});
   function getInitialBoardState() {
   try {
     const saved = localStorage.getItem("sanctum-board");
@@ -257,6 +262,22 @@ async function exportBoardAsPng() {
     setIsDrawing(false);
     setIsPanning(false);
   }
+  if (authPage === "login") {
+  return (
+    <Login
+      onSwitchToSignup={() => setAuthPage("signup")}
+      onLoginSuccess={() => setAuthPage("board")}
+    />
+  );
+}
+
+if (authPage === "signup") {
+  return (
+    <Signup
+      onSwitchToLogin={() => setAuthPage("login")}
+    />
+  );
+}
 return (
   <>
   <div className='min-h-screen bg-[#13141a] text-white'></div>
