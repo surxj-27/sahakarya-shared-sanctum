@@ -18,6 +18,48 @@ function App() {
   const [authPage, setAuthPage] = useState(() => {
   return localStorage.getItem("token") ? "board" : "login";
 });
+function handleLogout() {
+  localStorage.removeItem("token");
+  localStorage.removeItem("user");
+  setAuthPage("login");
+}
+useEffect(() => {
+  const token = localStorage.getItem("token");
+
+  if (!token) {
+    setAuthPage("login");
+    return;
+  }
+
+  async function verifyToken() {
+    try {
+      const response = await fetch(
+        "http://localhost:5000/api/auth/profile",
+        {
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+        }
+      );
+
+      if (!response.ok) {
+        localStorage.removeItem("token");
+        localStorage.removeItem("user");
+        setAuthPage("login");
+        return;
+      }
+
+      const data = await response.json();
+      localStorage.setItem("user", JSON.stringify(data.user));
+      setAuthPage("board");
+    } catch (error) {
+      console.error("Profile verification failed:", error);
+      setAuthPage("login");
+    }
+  }
+
+  verifyToken();
+}, []);
   function getInitialBoardState() {
   try {
     const saved = localStorage.getItem("sanctum-board");
@@ -289,6 +331,8 @@ return (
   onAllClear={clearBoard}
   saveStatus={saveStatus}
   onExport={exportBoardAsPng}
+  onLogout={handleLogout}
+   user={JSON.parse(localStorage.getItem("user") || "null")}
 />
   <main ref={canvasRef} className='relative h-[calc(100vh-70px)] bg-[#171820] overflow-hidden' style={{
     backgroundImage:"radial-gradient(#383945 1px,transparent 1px)",

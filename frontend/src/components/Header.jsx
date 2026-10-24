@@ -1,6 +1,6 @@
-function Header({ undo, redo, canUndo, canRedo, onAllClear, saveStatus ,onExport}) {
+function Header({ undo, redo, canUndo, canRedo, onAllClear, saveStatus ,onExport,onLogout,user}) {
   return (
-    <header className="header flex-h-[70px] items-center justify-between border-b border-white/10 bg-[#1c1d25] px-6 text-white">
+    <header className="header flex-h-[70px] flex-col-reverse items-center justify-between border-b border-white/10 bg-[#1c1d25] px-6 text-white">
       <h2 className="text-lg font-bold tracking-tight"> The Sahakarya</h2>
       <div className="rounded-md border border-white/10 bg-white/5 px-3 py-2 text-sm text-grey-300"> Untitle board</div>
       <div className="text-sm text-gray-400">
@@ -38,6 +38,20 @@ function Header({ undo, redo, canUndo, canRedo, onAllClear, saveStatus ,onExport
 </button>
 
       <button className="rounded-lg bg-violet-600 px-5 py-2 text-sm font-medium transition hover:bg-voilet-500"> Invite</button>
+      <button
+  onClick={onLogout}
+  className="rounded-lg bg-red-600 px-4 py-2 text-white hover:bg-red-500"
+>
+  Logout
+</button>
+<div>
+{user && (
+  <div className="text-sm text-gray-300">
+    <p>{user.name}</p>
+    <p className="text-xs text-gray-400">{user.email}</p>
+  </div>
+)}
+</div>
 
     </header>
   )
