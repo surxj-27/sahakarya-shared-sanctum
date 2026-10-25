@@ -1,6 +1,6 @@
 function DrawingLayer({ strokes, shapes }) {
   return (
-    <svg className="pointer-events-none absolute inset-0 z-10 h-full w-full">
+    <svg className="pointer-events-none absolute inset-0 z-10 h-full w-full overflow-visible">
       {strokes.map((stroke, index) => (
         <polyline
           key={stroke.id ?? index}

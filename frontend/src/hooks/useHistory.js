@@ -70,8 +70,11 @@ function useHistory(initialState) {
     setFuture(futureRef.current)
   }, [])
 
+  const getState = useCallback(() => presentRef.current, [])
+
   return {
     state: present,
+    getState,
     set,
     update,
     beginTransaction,

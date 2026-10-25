@@ -4,8 +4,30 @@ function Toolbar({
   setActiveTool,
   shapeType,
   setShapeType,
+  onZoomIn,
+  onZoomOut,
+  zoom,
 }) {  return (
     <aside className="inline-flex max-h-[75vh] flex-col items-center gap-3 overflow-y-auto rounded-xl border border-white/10 bg-[#1c1d25] p-3">
+      <button
+        onClick={onZoomIn}
+        className="rounded-lg p-3 text-gray-300 hover:bg-white/10"
+        aria-label="Zoom in"
+        title="Zoom in"
+      >
+        +
+      </button>
+      <span className="text-xs text-gray-400" aria-live="polite">
+        {Math.round(zoom * 100)}%
+      </span>
+      <button
+        onClick={onZoomOut}
+        className="rounded-lg p-3 text-gray-300 hover:bg-white/10"
+        aria-label="Zoom out"
+        title="Zoom out"
+      >
+        -
+      </button>
       <button
   onClick={() => setActiveTool("select")}
   className={`rounded-lg p-3 ${

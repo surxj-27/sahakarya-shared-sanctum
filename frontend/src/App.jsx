@@ -15,6 +15,45 @@ import useHistory  from './hooks/useHistory'
 import Login from "./pages/Login";
 import Signup from "./pages/Signup";
 
+const BOARD_COLLECTIONS = ["notes", "strokes", "shapes", "textItems"];
+const MIN_ZOOM = 0.2;
+const MAX_ZOOM = 4;
+
+function createBoardId() {
+  return `${socket.id || "local"}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
+function emitCollectionChanges(collection, previous, next, includeStrokeChanges = false) {
+  const previousById = new Map(previous.map((item) => [item.id, item]));
+  const nextById = new Map(next.map((item) => [item.id, item]));
+
+  for (const item of next) {
+    const previousItem = previousById.get(item.id);
+    if (!previousItem) {
+      if (collection !== "strokes" || includeStrokeChanges) {
+        socket.emit("board:object:create", { collection, object: item });
+      }
+    } else if (
+      (collection !== "strokes" || includeStrokeChanges) &&
+      JSON.stringify(previousItem) !== JSON.stringify(item)
+    ) {
+      socket.emit("board:object:update", { collection, object: item });
+    } else if (
+      collection === "strokes" &&
+      previousItem.points.length === item.points.length &&
+      JSON.stringify(previousItem) !== JSON.stringify(item)
+    ) {
+      socket.emit("board:object:update", { collection, object: item });
+    }
+  }
+
+  for (const item of previous) {
+    if (!nextById.has(item.id)) {
+      socket.emit("board:object:delete", { collection, id: item.id });
+    }
+  }
+}
+
 function App() {
   const [authPage, setAuthPage] = useState(() => {
   return localStorage.getItem("token") ? "board" : "login";
@@ -61,23 +100,6 @@ useEffect(() => {
 
   verifyToken();
 }, []);
-useEffect(() => {
-  socket.connect();
-
-  socket.on("connect", () => {
-    console.log("Connected to server:", socket.id);
-  });
-
-  socket.on("disconnect", () => {
-    console.log("Disconnected from server");
-  });
-
-  return () => {
-    socket.off("connect");
-    socket.off("disconnect");
-    socket.disconnect();
-  };
-}, []);
 
   function getInitialBoardState() {
   try {
@@ -100,53 +122,162 @@ useEffect(() => {
  
   const [draggingNote,setDraggingNote]=useState(null)
  const boardHistory = useHistory(getInitialBoardState());
+  const boardStateRef = useRef(boardHistory.state);
+  const updateHistory = boardHistory.update;
   const { notes, strokes, shapes, textItems } = boardHistory.state
   const updateCollection = useCallback((key, nextValue, record = true) => {
     const update = record ? boardHistory.set : boardHistory.update
-    update((previous) => ({
-      ...previous,
-      [key]: typeof nextValue === "function"
-        ? nextValue(previous[key])
-        : nextValue,
-    }))
+    const previousState = boardStateRef.current
+    const previousCollection = previousState[key]
+    const nextCollection = typeof nextValue === "function"
+      ? nextValue(previousCollection)
+      : nextValue
+    const nextState = { ...previousState, [key]: nextCollection }
+
+    boardStateRef.current = nextState
+    update(nextState)
+    emitCollectionChanges(key, previousCollection, nextCollection)
   }, [boardHistory.set, boardHistory.update])
   const setNotes = useCallback((nextNotes) => updateCollection("notes", nextNotes), [updateCollection])
+  const setShapes = useCallback((nextShapes) => updateCollection("shapes", nextShapes), [updateCollection])
+  const setStrokes = useCallback((nextStrokes) => updateCollection("strokes", nextStrokes), [updateCollection])
   const setTextItems = useCallback((nextTextItems) => updateCollection("textItems", nextTextItems), [updateCollection])
   const updateNotes = useCallback((nextNotes) => updateCollection("notes", nextNotes, false), [updateCollection])
   const updateStrokes = useCallback((nextStrokes) => updateCollection("strokes", nextStrokes, false), [updateCollection])
   const updateShapes = useCallback((nextShapes) => updateCollection("shapes", nextShapes, false), [updateCollection])
   const updateTextItems = useCallback((nextTextItems) => updateCollection("textItems", nextTextItems, false), [updateCollection])
   useEffect(() => {
-  function handleDrawing(data) {
-    if (data.type === "start") {
-      updateStrokes((prev) => [
-        ...prev,
-        data.stroke,
-      ]);
+    function applyRemoteChange(collection, updateItems) {
+      const previousState = boardStateRef.current;
+      const previousItems = previousState[collection];
+      const nextItems = updateItems(previousItems);
+      if (nextItems === previousItems) return;
+
+      const nextState = { ...previousState, [collection]: nextItems };
+      boardStateRef.current = nextState;
+      updateHistory(nextState);
     }
 
-    if (data.type === "point") {
-      updateStrokes((prev) =>
-        prev.map((stroke) =>
-          stroke.id === data.strokeId
-            ? {
-                ...stroke,
-                points: [...stroke.points, data.point],
-              }
-            : stroke
-        )
+    function handleRemoteCreate({ collection, object }) {
+      if (!BOARD_COLLECTIONS.includes(collection) || !object) return;
+      applyRemoteChange(collection, (items) =>
+        items.some((item) => item.id === object.id) ? items : [...items, object]
       );
     }
-  }
 
-  socket.on("drawing", handleDrawing);
+    function handleRemoteUpdate({ collection, object }) {
+      if (!BOARD_COLLECTIONS.includes(collection) || !object) return;
+      applyRemoteChange(collection, (items) => {
+        if (!items.some((item) => item.id === object.id)) return items;
+        return items.map((item) => item.id === object.id ? object : item);
+      });
+    }
+
+    function handleRemoteDelete({ collection, id }) {
+      if (!BOARD_COLLECTIONS.includes(collection)) return;
+      applyRemoteChange(collection, (items) => {
+        const nextItems = items.filter((item) => item.id !== id);
+        return nextItems.length === items.length ? items : nextItems;
+      });
+    }
+
+    function handleRemoteStrokeStart({ stroke }) {
+      if (!stroke) return;
+      applyRemoteChange("strokes", (items) =>
+        items.some((item) => item.id === stroke.id) ? items : [...items, stroke]
+      );
+    }
+
+    function handleRemoteStrokePoint({ strokeId, point }) {
+      if (!point) return;
+      applyRemoteChange("strokes", (items) => {
+        const stroke = items.find((item) => item.id === strokeId);
+        if (!stroke) return items;
+        return items.map((item) => item.id === strokeId
+          ? { ...item, points: [...item.points, point] }
+          : item
+        );
+      });
+    }
+
+    function handleLegacyDrawing(operation) {
+      if (operation?.type === "start" && operation.stroke) {
+        handleRemoteStrokeStart({ stroke: operation.stroke });
+      } else if (operation?.type === "point") {
+        handleRemoteStrokePoint(operation);
+      }
+    }
+
+    function handleBoardState(snapshot) {
+      if (
+        !snapshot ||
+        !BOARD_COLLECTIONS.every((collection) => Array.isArray(snapshot[collection]))
+      ) {
+        console.error("Received invalid board state from server");
+        return;
+      }
+
+      boardStateRef.current = snapshot;
+      updateHistory(snapshot);
+    }
+
+    function handleBoardClear() {
+      const emptyBoard = {
+        notes: [],
+        strokes: [],
+        shapes: [],
+        textItems: [],
+      };
+      boardStateRef.current = emptyBoard;
+      updateHistory(emptyBoard);
+    }
+
+    function handleConnect() {
+      console.log("Connected to server:", socket.id);
+      socket.emit("board:join", boardStateRef.current);
+    }
+
+    function handleDisconnect() {
+      console.log("Disconnected from server");
+    }
+
+    socket.on("connect", handleConnect);
+    socket.on("disconnect", handleDisconnect);
+    socket.on("board:state", handleBoardState);
+    socket.on("board:object:create", handleRemoteCreate);
+    socket.on("board:object:update", handleRemoteUpdate);
+    socket.on("board:object:delete", handleRemoteDelete);
+    socket.on("board:stroke:start", handleRemoteStrokeStart);
+    socket.on("board:stroke:point", handleRemoteStrokePoint);
+    socket.on("drawing", handleLegacyDrawing);
+    socket.on("board:clear", handleBoardClear);
+    socket.connect();
 
   return () => {
-    socket.off("drawing", handleDrawing);
+      socket.off("connect", handleConnect);
+      socket.off("disconnect", handleDisconnect);
+      socket.off("board:state", handleBoardState);
+      socket.off("board:object:create", handleRemoteCreate);
+      socket.off("board:object:update", handleRemoteUpdate);
+      socket.off("board:object:delete", handleRemoteDelete);
+      socket.off("board:stroke:start", handleRemoteStrokeStart);
+      socket.off("board:stroke:point", handleRemoteStrokePoint);
+      socket.off("drawing", handleLegacyDrawing);
+      socket.off("board:clear", handleBoardClear);
+      socket.disconnect();
   };
-}, [updateStrokes]);
-  const undo=boardHistory.undo
-  const redo=boardHistory.redo
+}, [updateHistory]);
+  function applyHistoryAction(action) {
+    const previousState = boardStateRef.current;
+    action();
+    const nextState = boardHistory.getState();
+    boardStateRef.current = nextState;
+    for (const collection of BOARD_COLLECTIONS) {
+      emitCollectionChanges(collection, previousState[collection], nextState[collection], true);
+    }
+  }
+  const undo = () => applyHistoryAction(boardHistory.undo)
+  const redo = () => applyHistoryAction(boardHistory.redo)
   const canUndo=boardHistory.canUndo
   const canRedo=boardHistory.canRedo
   const setBoardHistory = boardHistory.set
@@ -156,6 +287,7 @@ const [pan, setPan] = useState({ x: 0, y: 0 });
 const [isPanning, setIsPanning] = useState(false);
 const [lastMouse, setLastMouse] = useState({ x: 0, y: 0 });
 const [zoom, setZoom] = useState(1);
+const viewportRef = useRef({ pan, zoom });
 const [draggingText, setDraggingText] = useState(null);
 const [shapeType, setShapeType] = useState("rect");
 const [selectedObject, setSelectedObject] = useState(null);
@@ -164,15 +296,85 @@ const [dragStart, setDragStart] = useState(null);
 const canvasRef = useRef(null);
 const [saveStatus, setSaveStatus] = useState("Saved");
 const currentStrokeIdRef = useRef(null);
+const currentShapeIdRef = useRef(null);
+
+function applyViewport(nextPan, nextZoom, broadcast = true) {
+  if (
+    !nextPan ||
+    !Number.isFinite(nextPan.x) ||
+    !Number.isFinite(nextPan.y) ||
+    !Number.isFinite(nextZoom)
+  ) {
+    return;
+  }
+
+  const viewport = {
+    pan: { x: nextPan.x, y: nextPan.y },
+    zoom: Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, nextZoom)),
+  };
+  viewportRef.current = viewport;
+  setPan(viewport.pan);
+  setZoom(viewport.zoom);
+
+  if (broadcast) {
+    socket.emit("board:viewport", viewport);
+  }
+}
 
 function getCanvasPoint(event, canvas = event.currentTarget) {
-  const rect = canvas.getBoundingClientRect();
+  const targetCanvas = canvasRef.current || canvas;
+  const rect = targetCanvas.getBoundingClientRect();
+  const { pan: currentPan, zoom: currentZoom } = viewportRef.current;
 
   return {
-    x: (event.clientX - rect.left - pan.x) / zoom,
-    y: (event.clientY - rect.top - pan.y) / zoom,
+    x: (event.clientX - rect.left - currentPan.x) / currentZoom,
+    y: (event.clientY - rect.top - currentPan.y) / currentZoom,
   };
 }
+
+function zoomAtCanvasCenter(nextZoom) {
+  const canvas = canvasRef.current;
+  if (!canvas) return;
+
+  const { pan: currentPan, zoom: currentZoom } = viewportRef.current;
+  const rect = canvas.getBoundingClientRect();
+  const centerX = rect.width / 2;
+  const centerY = rect.height / 2;
+  const boardX = (centerX - currentPan.x) / currentZoom;
+  const boardY = (centerY - currentPan.y) / currentZoom;
+
+  applyViewport({
+    x: centerX - boardX * nextZoom,
+    y: centerY - boardY * nextZoom,
+  }, nextZoom);
+}
+
+function zoomIn() {
+  zoomAtCanvasCenter(viewportRef.current.zoom * 1.2);
+}
+
+function zoomOut() {
+  zoomAtCanvasCenter(viewportRef.current.zoom / 1.2);
+}
+
+useEffect(() => {
+  function handleRemoteViewport(viewport) {
+    if (
+      !viewport ||
+      !viewport.pan ||
+      !Number.isFinite(viewport.pan.x) ||
+      !Number.isFinite(viewport.pan.y) ||
+      !Number.isFinite(viewport.zoom)
+    ) {
+      return;
+    }
+
+    applyViewport(viewport.pan, viewport.zoom, false);
+  }
+
+  socket.on("board:viewport", handleRemoteViewport);
+  return () => socket.off("board:viewport", handleRemoteViewport);
+}, []);
 
 
 useEffect(() => {
@@ -185,17 +387,11 @@ useEffect(() => {
     if (selectedObject.type === "note") {
       setNotes((prev) => prev.filter((item) => item.id !== selectedObject.id));
     } else if (selectedObject.type === "shape") {
-      setBoardHistory((prev) => ({
-        ...prev,
-        shapes: prev.shapes.filter((item) => item.id !== selectedObject.id),
-      }));
+      setShapes((prev) => prev.filter((item) => item.id !== selectedObject.id));
     } else if (selectedObject.type === "text") {
       setTextItems((prev) => prev.filter((item) => item.id !== selectedObject.id));
     } else if (selectedObject.type === "stroke") {
-      setBoardHistory((prev) => ({
-        ...prev,
-        strokes: prev.strokes.filter((item) => item.id !== selectedObject.id),
-      }));
+      setStrokes((prev) => prev.filter((item) => item.id !== selectedObject.id));
     }
 
     setSelectedObject(null);
@@ -206,7 +402,7 @@ useEffect(() => {
   return () => {
     window.removeEventListener("keydown", handleKeyDown);
   };
-}, [selectedObject, setNotes, setTextItems, setBoardHistory]);
+}, [selectedObject, setNotes, setShapes, setStrokes, setTextItems]);
 
 function getObjectBounds(object) {
   if (object.type === "note") {
@@ -280,21 +476,21 @@ useEffect(() => {
   function handleWheel(e) {
     e.preventDefault();
 
+    const { pan: currentPan, zoom: currentZoom } = viewportRef.current;
     const nextZoom = Math.min(
-      4,
-      Math.max(0.2, zoom * Math.exp(-e.deltaY * 0.001))
+      MAX_ZOOM,
+      Math.max(MIN_ZOOM, currentZoom * Math.exp(-e.deltaY * 0.001))
     );
     const rect = canvas.getBoundingClientRect();
     const cursorX = e.clientX - rect.left;
     const cursorY = e.clientY - rect.top;
-    const canvasX = (cursorX - pan.x) / zoom;
-    const canvasY = (cursorY - pan.y) / zoom;
+    const canvasX = (cursorX - currentPan.x) / currentZoom;
+    const canvasY = (cursorY - currentPan.y) / currentZoom;
 
-    setPan({
+    applyViewport({
       x: cursorX - canvasX * nextZoom,
       y: cursorY - canvasY * nextZoom,
-    });
-    setZoom(nextZoom);
+    }, nextZoom);
   }
 
   canvas.addEventListener("wheel", handleWheel, { passive: false });
@@ -322,14 +518,17 @@ async function exportBoardAsPng() {
 
 
   function createNote(){
-    const newNote={
-      id:Date.now(),
-      text:"",
-      x:200+notes.length*25,y:150+notes.length*25,
-      color:"bg-yellow-200",
-    };
-    setNotes([...notes,newNote])
-    console.log("Notes",[...notes,newNote]);
+    const id = createBoardId();
+    setNotes((previous) => [
+      ...previous,
+      {
+        id,
+        text: "",
+        x: 200 + previous.length * 25,
+        y: 150 + previous.length * 25,
+        color: "bg-yellow-200",
+      },
+    ]);
   }
   function deleteNote(id){
     setNotes((prevnotes)=>
@@ -340,12 +539,15 @@ async function exportBoardAsPng() {
     if (!window.confirm("Clear all canvas content? This can be undone.")) return;
 
     boardHistory.commitTransaction();
-    setBoardHistory({
+    const emptyBoard = {
       notes: [],
       strokes: [],
       shapes: [],
       textItems: [],
-    });
+    };
+    boardStateRef.current = emptyBoard;
+    setBoardHistory(emptyBoard);
+    socket.emit("board:clear");
     setSelectedObject(null);
     setDragStart(null);
     setDraggingNote(null);
@@ -384,8 +586,9 @@ return (
    user={JSON.parse(localStorage.getItem("user") || "null")}
 />
   <main ref={canvasRef} className='relative h-[calc(100vh-70px)] bg-[#171820] overflow-hidden' style={{
-    backgroundImage:"radial-gradient(#383945 1px,transparent 1px)",
-    backgroundSize:"24px 24px",
+    backgroundImage:`radial-gradient(#383945 ${zoom}px,transparent ${zoom}px)`,
+    backgroundSize:`${24 * zoom}px ${24 * zoom}px`,
+    backgroundPosition:`${pan.x}px ${pan.y}px`,
    
   }}
   onMouseDown={(e) => {
@@ -518,11 +721,13 @@ if (clickedNote) {
     if (activeTool === "shape") {
   boardHistory.beginTransaction();
   const { x: startX, y: startY } = getCanvasPoint(e);
+  const shapeId = createBoardId();
+  currentShapeIdRef.current = shapeId;
 
   updateShapes((prev) => [
     ...prev,
     {
-      id: Date.now(),
+      id: shapeId,
       type: shapeType,
       startX,
       startY,
@@ -543,7 +748,7 @@ if (clickedNote) {
   setTextItems((prev) => [
     ...prev,
     {
-      id: Date.now(),
+      id: createBoardId(),
       x,
       y,
       text: "",
@@ -570,7 +775,7 @@ if (clickedNote) {
 const point = getCanvasPoint(e);
 
 const newStroke = {
-  id: `${socket.id}-${Date.now()}-${Math.random()}`,
+  id: createBoardId(),
   points: [point],
 };
 
@@ -581,18 +786,9 @@ setIsDrawing(true);
 
 updateStrokes((prev) => [...prev, newStroke]);
 console.log("Sending drawing:", newStroke);
-socket.emit("drawing", {
-  
-  type: "start",
+socket.emit("board:stroke:start", {
   stroke: newStroke,
 });
-      updateStrokes((prev) => [
-    ...prev,
-    {
-      id: `${Date.now()}-${Math.random()}`,
-      points: [point],
-    },
-  ]);
 }}
   
 onMouseMove={(e) => {
@@ -699,28 +895,28 @@ if (
   const { x: currentX, y: currentY } = getCanvasPoint(e);
 
   updateShapes((prev) => {
-    const updated = [...prev];
-    const lastShape = updated[updated.length - 1];
+    const activeShape = prev.find((shape) => shape.id === currentShapeIdRef.current);
+    if (!activeShape) return prev;
 
-    if (!lastShape) return prev;
+    return prev.map((shape) => {
+      if (shape.id !== currentShapeIdRef.current) return shape;
 
-    if (lastShape.type === "arrow") {
-      updated[updated.length - 1] = {
-        ...lastShape,
-        endX: currentX,
-        endY: currentY,
+      if (shape.type === "arrow") {
+        return {
+          ...shape,
+          endX: currentX,
+          endY: currentY,
+        };
+      }
+
+      return {
+        ...shape,
+        x: Math.min(activeShape.startX, currentX),
+        y: Math.min(activeShape.startY, currentY),
+        width: Math.abs(currentX - activeShape.startX),
+        height: Math.abs(currentY - activeShape.startY),
       };
-    } else {
-      updated[updated.length - 1] = {
-        ...lastShape,
-        x: Math.min(lastShape.startX, currentX),
-        y: Math.min(lastShape.startY, currentY),
-        width: Math.abs(currentX - lastShape.startX),
-        height: Math.abs(currentY - lastShape.startY),
-      };
-    }
-
-    return updated;
+    });
   });
 
   return;
@@ -741,24 +937,17 @@ if (
   );
   return;
 }if (activeTool === "pen" && isDrawing) {
-  const point = getCanvasPoint(e);
+const point = getCanvasPoint(e);
 
-  updateStrokes((prev) => {
-    const updated = [...prev];
-    const lastStroke = updated[updated.length - 1];
-
-    if (!lastStroke) return prev;
-
-    updated[updated.length - 1] = {
-      ...lastStroke,
-      points: [...lastStroke.points, point],
-    };
-
-    return updated;
+updateStrokes((prev) => {
+  if (!currentStrokeIdRef.current) return prev;
+  return prev.map((stroke) => stroke.id === currentStrokeIdRef.current
+    ? { ...stroke, points: [...stroke.points, point] }
+    : stroke
+  );
   });
 console.log("Sending point");
-  socket.emit("drawing", {
-    type: "point",
+  socket.emit("board:stroke:point", {
     strokeId: currentStrokeIdRef.current,
     point,
   });
@@ -782,11 +971,12 @@ console.log("Sending point");
   if (isPanning) {
   const dx = e.clientX - lastMouse.x;
   const dy = e.clientY - lastMouse.y;
+  const currentViewport = viewportRef.current;
 
-  setPan((prev) => ({
-    x: prev.x + dx,
-    y: prev.y + dy,
-  }));
+  applyViewport({
+    x: currentViewport.pan.x + dx,
+    y: currentViewport.pan.y + dy,
+  }, currentViewport.zoom);
 
   setLastMouse({
     x: e.clientX,
@@ -817,6 +1007,7 @@ console.log("Sending point");
     setIsDrawing(false)
     setDraggingNote(null)
     currentStrokeIdRef.current = null;
+    currentShapeIdRef.current = null;
   }}
   >
     <div className='fixed left-5 top-32 z-10'>
@@ -826,6 +1017,9 @@ console.log("Sending point");
   setActiveTool={setActiveTool}
   shapeType={shapeType}
   setShapeType={setShapeType}
+  onZoomIn={zoomIn}
+  onZoomOut={zoomOut}
+  zoom={zoom}
 />
     </div>
     <div
