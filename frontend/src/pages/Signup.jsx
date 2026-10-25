@@ -1,5 +1,6 @@
 
 import { useState } from "react";
+import AuthLayout from "../components/AuthLayout";
 
 function Signup({ onSwitchToLogin }) {
   const [name, setName] = useState("");
@@ -35,65 +36,60 @@ function Signup({ onSwitchToLogin }) {
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-[#13141a] text-white">
+    <AuthLayout
+      eyebrow="come on in"
+      title={<>Make room for a <span className="underline-doodle">new idea.</span></>}
+    >
+      <p className="auth-description">Join The Sahakarya</p>
       <form
         onSubmit={handleSubmit}
-        className="w-full max-w-md rounded-2xl border border-gray-700 bg-[#1c1d27] p-8"
+        className="auth-form"
       >
-        <h1 className="mb-2 text-3xl font-bold">Create Account</h1>
-        <p className="mb-6 text-gray-400">
-          Join The Sahakarya
-        </p>
-
-        <label className="mb-2 block">Name</label>
+        <label>Name</label>
         <input
           value={name}
           onChange={(e) => setName(e.target.value)}
           required
-          className="mb-4 w-full rounded-lg border border-gray-600 bg-[#13141a] p-3 outline-none focus:border-purple-500"
           placeholder="Your name"
         />
 
-        <label className="mb-2 block">Email</label>
+        <label>Email</label>
         <input
           type="email"
           value={email}
           onChange={(e) => setEmail(e.target.value)}
           required
-          className="mb-4 w-full rounded-lg border border-gray-600 bg-[#13141a] p-3 outline-none focus:border-purple-500"
           placeholder="you@example.com"
         />
 
-        <label className="mb-2 block">Password</label>
+        <label>Password</label>
         <input
           type="password"
           value={password}
           onChange={(e) => setPassword(e.target.value)}
           minLength={6}
           required
-          className="mb-6 w-full rounded-lg border border-gray-600 bg-[#13141a] p-3 outline-none focus:border-purple-500"
           placeholder="At least 6 characters"
         />
 
         <button
           type="submit"
-          className="w-full rounded-lg bg-purple-600 p-3 font-semibold hover:bg-purple-500"
+          className="btn btn-dark auth-submit"
         >
           Sign Up
         </button>
 
-        <p className="mt-5 text-center text-gray-400">
+        <p className="auth-switch">
           Already have an account?{" "}
           <button
             type="button"
             onClick={onSwitchToLogin}
-            className="text-purple-400 hover:text-purple-300"
           >
             Login
           </button>
         </p>
       </form>
-    </div>
+    </AuthLayout>
   );
 }
 
