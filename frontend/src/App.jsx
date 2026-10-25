@@ -1,4 +1,10 @@
 import { useState , useEffect, useRef, useCallback} from 'react'
+import {
+  Routes,
+  Route,
+  Navigate,
+  useNavigate,
+} from "react-router-dom";
 import socket from "./socket";
 import { toPng } from "html-to-image";
 import heroImg from './assets/hero.png'
@@ -14,7 +20,7 @@ import SelectionOverlay from "./components/SelectionOverlay"
 import useHistory  from './hooks/useHistory'
 import Login from "./pages/Login";
 import Signup from "./pages/Signup";
-
+import Landing from "./components/Landing";
 const BOARD_COLLECTIONS = ["notes", "strokes", "shapes", "textItems"];
 const MIN_ZOOM = 0.2;
 const MAX_ZOOM = 4;
@@ -55,9 +61,10 @@ function emitCollectionChanges(collection, previous, next, includeStrokeChanges 
 }
 
 function App() {
-  const [authPage, setAuthPage] = useState(() => {
-  return localStorage.getItem("token") ? "board" : "login";
-});
+  const navigate = useNavigate();
+  const [authStatus, setAuthStatus] = useState(() =>
+    localStorage.getItem("token") ? "checking" : "unauthenticated"
+  );
 const [currentUser, setCurrentUser] = useState(() =>
   JSON.parse(localStorage.getItem("user") || "null")
 );
@@ -65,13 +72,14 @@ function handleLogout() {
   localStorage.removeItem("token");
   localStorage.removeItem("user");
   setCurrentUser(null);
-  setAuthPage("login");
+  setAuthStatus("unauthenticated");
+  navigate("/", { replace: true });
 }
 useEffect(() => {
   const token = localStorage.getItem("token");
 
   if (!token) {
-    setAuthPage("login");
+    setAuthStatus("unauthenticated");
     return;
   }
 
@@ -90,17 +98,17 @@ useEffect(() => {
         localStorage.removeItem("token");
         localStorage.removeItem("user");
         setCurrentUser(null);
-        setAuthPage("login");
+        setAuthStatus("unauthenticated");
         return;
       }
 
       const data = await response.json();
       localStorage.setItem("user", JSON.stringify(data.user));
       setCurrentUser(data.user);
-      setAuthPage("board");
+      setAuthStatus("authenticated");
     } catch (error) {
       console.error("Profile verification failed:", error);
-      setAuthPage("login");
+      setAuthStatus("unauthenticated");
     }
   }
 
@@ -600,27 +608,51 @@ async function exportBoardAsPng() {
     setIsDrawing(false);
     setIsPanning(false);
   }
-  if (authPage === "login") {
-  return (
-    <Login
-      onSwitchToSignup={() => setAuthPage("signup")}
-      onLoginSuccess={() => {
-        setCurrentUser(JSON.parse(localStorage.getItem("user") || "null"));
-        setAuthPage("board");
-      }}
-    />
-  );
-}
-
-if (authPage === "signup") {
-  return (
-    <Signup
-      onSwitchToLogin={() => setAuthPage("login")}
-    />
-  );
-}
 return (
-  <>
+  <Routes>
+    <Route
+      path="/"
+      element={(
+        <Landing
+          onLogin={() => navigate("/login")}
+          onSignup={() => navigate("/signup")}
+        />
+      )}
+    />
+    <Route
+      path="/login"
+      element={
+        authStatus === "checking" ? null : authStatus === "authenticated" ? (
+          <Navigate to="/board" replace />
+        ) : (
+          <Login
+            onSwitchToSignup={() => navigate("/signup")}
+            onLoginSuccess={() => {
+              setCurrentUser(JSON.parse(localStorage.getItem("user") || "null"));
+              setAuthStatus("authenticated");
+              navigate("/board", { replace: true });
+            }}
+          />
+        )
+      }
+    />
+    <Route
+      path="/signup"
+      element={
+        authStatus === "checking" ? null : authStatus === "authenticated" ? (
+          <Navigate to="/board" replace />
+        ) : (
+          <Signup onSwitchToLogin={() => navigate("/login")} />
+        )
+      }
+    />
+    <Route
+      path="/board"
+      element={
+        authStatus === "checking" ? null : authStatus !== "authenticated" ? (
+          <Navigate to="/login" replace />
+        ) : (
+          <>
 <Header
   undo={undo}
   redo={redo}
@@ -630,7 +662,7 @@ return (
   saveStatus={saveStatus}
   onExport={exportBoardAsPng}
   onLogout={handleLogout}
-   user={JSON.parse(localStorage.getItem("user") || "null")}
+  user={currentUser}
 />
   <main ref={canvasRef} className='relative h-[calc(100vh-70px)] bg-[#171820] overflow-hidden' style={{
     backgroundImage:`radial-gradient(#383945 ${zoom}px,transparent ${zoom}px)`,
@@ -1177,7 +1209,12 @@ console.log("Sending point");
   </main>
 
   </>
-)
+        )
+      }
+    />
+    <Route path="*" element={<Navigate to="/" replace />} />
+  </Routes>
+);
 }
 
 export default App
