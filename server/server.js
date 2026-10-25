@@ -195,8 +195,30 @@ io.on("connection", (socket) => {
     socket.broadcast.emit("drawing", operation);
   });
 
+  socket.on("cursor:move", (position) => {
+    if (
+      !position ||
+      !Number.isFinite(position.x) ||
+      !Number.isFinite(position.y)
+    ) {
+      return;
+    }
+
+    const displayName = typeof position.displayName === "string"
+      ? position.displayName.trim().slice(0, 50) || "Collaborator"
+      : "Collaborator";
+
+    socket.broadcast.emit("cursor:update", {
+      id: socket.id,
+      x: position.x,
+      y: position.y,
+      displayName,
+    });
+  });
+
   socket.on("disconnect", () => {
     console.log("User disconnected:", socket.id);
+    socket.broadcast.emit("cursor:remove", socket.id);
   });
 });
 app.use(cors());

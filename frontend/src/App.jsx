@@ -58,9 +58,13 @@ function App() {
   const [authPage, setAuthPage] = useState(() => {
   return localStorage.getItem("token") ? "board" : "login";
 });
+const [currentUser, setCurrentUser] = useState(() =>
+  JSON.parse(localStorage.getItem("user") || "null")
+);
 function handleLogout() {
   localStorage.removeItem("token");
   localStorage.removeItem("user");
+  setCurrentUser(null);
   setAuthPage("login");
 }
 useEffect(() => {
@@ -85,12 +89,14 @@ useEffect(() => {
       if (!response.ok) {
         localStorage.removeItem("token");
         localStorage.removeItem("user");
+        setCurrentUser(null);
         setAuthPage("login");
         return;
       }
 
       const data = await response.json();
       localStorage.setItem("user", JSON.stringify(data.user));
+      setCurrentUser(data.user);
       setAuthPage("board");
     } catch (error) {
       console.error("Profile verification failed:", error);
@@ -146,6 +152,7 @@ useEffect(() => {
   const updateStrokes = useCallback((nextStrokes) => updateCollection("strokes", nextStrokes, false), [updateCollection])
   const updateShapes = useCallback((nextShapes) => updateCollection("shapes", nextShapes, false), [updateCollection])
   const updateTextItems = useCallback((nextTextItems) => updateCollection("textItems", nextTextItems, false), [updateCollection])
+  const [remoteCursors, setRemoteCursors] = useState({});
   useEffect(() => {
     function applyRemoteChange(collection, updateItems) {
       const previousState = boardStateRef.current;
@@ -239,8 +246,44 @@ useEffect(() => {
 
     function handleDisconnect() {
       console.log("Disconnected from server");
+      setRemoteCursors({});
     }
 
+    function handleCursorUpdate(position) {
+      if (
+        !position ||
+        typeof position.id !== "string" ||
+        !Number.isFinite(position.x) ||
+        !Number.isFinite(position.y)
+      ) {
+        return;
+      }
+
+      setRemoteCursors((previous) => ({
+        ...previous,
+        [position.id]: {
+          x: position.x,
+          y: position.y,
+          displayName: typeof position.displayName === "string" && position.displayName.trim()
+            ? position.displayName.trim()
+            : "Collaborator",
+        },
+      }));
+    }
+
+    function handleCursorRemove(socketId) {
+      if (typeof socketId !== "string") return;
+
+      setRemoteCursors((previous) => {
+        if (!(socketId in previous)) return previous;
+        const next = { ...previous };
+        delete next[socketId];
+        return next;
+      });
+    }
+
+    socket.on("cursor:update", handleCursorUpdate);
+    socket.on("cursor:remove", handleCursorRemove);
     socket.on("connect", handleConnect);
     socket.on("disconnect", handleDisconnect);
     socket.on("board:state", handleBoardState);
@@ -264,6 +307,8 @@ useEffect(() => {
       socket.off("board:stroke:point", handleRemoteStrokePoint);
       socket.off("drawing", handleLegacyDrawing);
       socket.off("board:clear", handleBoardClear);
+      socket.off("cursor:update", handleCursorUpdate);
+      socket.off("cursor:remove", handleCursorRemove);
       socket.disconnect();
   };
 }, [updateHistory]);
@@ -559,7 +604,10 @@ async function exportBoardAsPng() {
   return (
     <Login
       onSwitchToSignup={() => setAuthPage("signup")}
-      onLoginSuccess={() => setAuthPage("board")}
+      onLoginSuccess={() => {
+        setCurrentUser(JSON.parse(localStorage.getItem("user") || "null"));
+        setAuthPage("board");
+      }}
     />
   );
 }
@@ -573,7 +621,6 @@ if (authPage === "signup") {
 }
 return (
   <>
-  <div className='min-h-screen bg-[#13141a] text-white'></div>
 <Header
   undo={undo}
   redo={redo}
@@ -792,6 +839,12 @@ socket.emit("board:stroke:start", {
 }}
   
 onMouseMove={(e) => {
+const { x, y } = getCanvasPoint(e);
+socket.emit("cursor:move", {
+  x,
+  y,
+  displayName: currentUser?.name || "Collaborator",
+});
   
 if (
   activeTool === "select" &&
@@ -1105,6 +1158,22 @@ console.log("Sending point");
       }
     />
     </div>
+    {Object.entries(remoteCursors).map(([id, position]) => (
+  <div
+    key={id}
+    className="pointer-events-none absolute z-50"
+    style={{
+      left: pan.x + position.x * zoom,
+      top: pan.y + position.y * zoom,
+      transition: "left 50ms linear, top 50ms linear",
+    }}
+  >
+    <div className="h-3 w-3 rounded-full bg-pink-500" />
+    <span className="ml-2 rounded bg-pink-500 px-2 py-1 text-xs text-white">
+      {position.displayName || "Collaborator"}
+    </span>
+  </div>
+))}
   </main>
 
   </>
