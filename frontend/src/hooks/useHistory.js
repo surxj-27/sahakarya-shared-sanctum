@@ -31,6 +31,16 @@ function useHistory(initialState) {
     setPresent(nextState)
   }, [])
 
+  const reset = useCallback((newState) => {
+    pastRef.current = []
+    setPast([])
+    presentRef.current = newState
+    setPresent(newState)
+    futureRef.current = []
+    setFuture([])
+    transactionRef.current = null
+  }, [])
+
   const beginTransaction = useCallback(() => {
     if (transactionRef.current === null) {
       transactionRef.current = presentRef.current
@@ -77,6 +87,7 @@ function useHistory(initialState) {
     getState,
     set,
     update,
+    reset,
     beginTransaction,
     commitTransaction,
     undo,

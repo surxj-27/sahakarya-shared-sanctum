@@ -1,5 +1,15 @@
 const mongoose = require("mongoose");
 
+const boardStateSchema = new mongoose.Schema(
+  {
+    notes: { type: [mongoose.Schema.Types.Mixed], default: () => [] },
+    strokes: { type: [mongoose.Schema.Types.Mixed], default: () => [] },
+    shapes: { type: [mongoose.Schema.Types.Mixed], default: () => [] },
+    textItems: { type: [mongoose.Schema.Types.Mixed], default: () => [] },
+  },
+  { _id: false }
+);
+
 const roomSchema = new mongoose.Schema(
   {
     name: {
@@ -25,6 +35,11 @@ const roomSchema = new mongoose.Schema(
       type: String,
       required: true,
       unique: true,
+    },
+
+    boardState: {
+      type: boardStateSchema,
+      default: () => ({}),
     },
   },
   { timestamps: true }

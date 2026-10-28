@@ -1,9 +1,10 @@
-import { useState , useEffect, useRef, useCallback} from 'react'
+import { useState , useEffect, useLayoutEffect, useRef, useCallback} from 'react'
 import {
   Routes,
   Route,
   Navigate,
   useNavigate,
+  useLocation,
 } from "react-router-dom";
 import socket from "./socket";
 import { toPng } from "html-to-image";
@@ -21,15 +22,51 @@ import useHistory  from './hooks/useHistory'
 import Login from "./pages/Login";
 import Signup from "./pages/Signup";
 import Landing from "./components/Landing";
+import Dashboard from "./components/Dashboard";
 const BOARD_COLLECTIONS = ["notes", "strokes", "shapes", "textItems"];
 const MIN_ZOOM = 0.2;
 const MAX_ZOOM = 4;
+
+function normalizeBoardState(candidate) {
+  const emptyBoard = {
+    notes: [],
+    strokes: [],
+    shapes: [],
+    textItems: [],
+  };
+  if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) {
+    return emptyBoard;
+  }
+
+  return Object.fromEntries(
+    Object.keys(emptyBoard).map((collection) => [
+      collection,
+      Array.isArray(candidate[collection]) ? candidate[collection] : [],
+    ])
+  );
+}
+
+function distanceToSegment(point, start, end) {
+  const dx = end.x - start.x;
+  const dy = end.y - start.y;
+  const lengthSquared = dx * dx + dy * dy;
+  if (lengthSquared === 0) return Math.hypot(point.x - start.x, point.y - start.y);
+
+  const projection = Math.max(
+    0,
+    Math.min(1, ((point.x - start.x) * dx + (point.y - start.y) * dy) / lengthSquared)
+  );
+  return Math.hypot(
+    point.x - (start.x + projection * dx),
+    point.y - (start.y + projection * dy)
+  );
+}
 
 function createBoardId() {
   return `${socket.id || "local"}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
 
-function emitCollectionChanges(collection, previous, next, includeStrokeChanges = false) {
+function emitCollectionChanges(collection, previous, next, emitBoardEvent, includeStrokeChanges = false) {
   const previousById = new Map(previous.map((item) => [item.id, item]));
   const nextById = new Map(next.map((item) => [item.id, item]));
 
@@ -37,46 +74,66 @@ function emitCollectionChanges(collection, previous, next, includeStrokeChanges 
     const previousItem = previousById.get(item.id);
     if (!previousItem) {
       if (collection !== "strokes" || includeStrokeChanges) {
-        socket.emit("board:object:create", { collection, object: item });
+        emitBoardEvent("board:object:create", { collection, object: item });
       }
     } else if (
       (collection !== "strokes" || includeStrokeChanges) &&
       JSON.stringify(previousItem) !== JSON.stringify(item)
     ) {
-      socket.emit("board:object:update", { collection, object: item });
+      emitBoardEvent("board:object:update", { collection, object: item });
     } else if (
       collection === "strokes" &&
       previousItem.points.length === item.points.length &&
       JSON.stringify(previousItem) !== JSON.stringify(item)
     ) {
-      socket.emit("board:object:update", { collection, object: item });
+      emitBoardEvent("board:object:update", { collection, object: item });
     }
   }
 
   for (const item of previous) {
     if (!nextById.has(item.id)) {
-      socket.emit("board:object:delete", { collection, id: item.id });
+      emitBoardEvent("board:object:delete", { collection, id: item.id });
     }
   }
 }
 
 function App() {
   const navigate = useNavigate();
+  const location = useLocation();
+  const boardRoomId = location.pathname.match(/^\/board\/([^/]+)\/?$/)?.[1] || null;
+  const boardSessionRef = useRef({ roomId: null, ready: false, requestId: null });
+  const [readyBoardLocationKey, setReadyBoardLocationKey] = useState(null);
+  const boardReady = !boardRoomId || readyBoardLocationKey === location.key;
+  useLayoutEffect(() => {
+    boardSessionRef.current = {
+      roomId: boardRoomId,
+      ready: !boardRoomId,
+      requestId: null,
+    };
+  }, [boardRoomId, location.key]);
+  const emitBoardEvent = useCallback((eventName, ...args) => {
+    if (boardSessionRef.current.ready) {
+      socket.emit(eventName, ...args);
+    }
+  }, []);
   const [authStatus, setAuthStatus] = useState(() =>
-    localStorage.getItem("token") ? "checking" : "unauthenticated"
+    sessionStorage.getItem("token") ? "checking" : "unauthenticated"
   );
 const [currentUser, setCurrentUser] = useState(() =>
-  JSON.parse(localStorage.getItem("user") || "null")
+  JSON.parse(sessionStorage.getItem("user") || "null")
 );
+const [rooms, setRooms] = useState([]);
 function handleLogout() {
-  localStorage.removeItem("token");
-  localStorage.removeItem("user");
+  sessionStorage.removeItem("token");
+  sessionStorage.removeItem("user");
   setCurrentUser(null);
+  setRooms([]);
   setAuthStatus("unauthenticated");
   navigate("/", { replace: true });
 }
 useEffect(() => {
-  const token = localStorage.getItem("token");
+  const token = sessionStorage.getItem("token");
+  const cachedUser = sessionStorage.getItem("user");
 
   if (!token) {
     setAuthStatus("unauthenticated");
@@ -95,51 +152,208 @@ useEffect(() => {
       );
 
       if (!response.ok) {
-        localStorage.removeItem("token");
-        localStorage.removeItem("user");
-        setCurrentUser(null);
-        setAuthStatus("unauthenticated");
+        if (response.status === 401 || response.status === 404) {
+          sessionStorage.removeItem("token");
+          sessionStorage.removeItem("user");
+          setCurrentUser(null);
+          setAuthStatus("unauthenticated");
+        } else {
+          setAuthStatus(cachedUser ? "authenticated" : "unauthenticated");
+        }
         return;
       }
 
       const data = await response.json();
-      localStorage.setItem("user", JSON.stringify(data.user));
+      sessionStorage.setItem("user", JSON.stringify(data.user));
       setCurrentUser(data.user);
       setAuthStatus("authenticated");
     } catch (error) {
       console.error("Profile verification failed:", error);
-      setAuthStatus("unauthenticated");
+      setAuthStatus(cachedUser ? "authenticated" : "unauthenticated");
     }
   }
 
   verifyToken();
 }, []);
+useEffect(() => {
+  if (authStatus !== "authenticated") return;
+
+  const token = sessionStorage.getItem("token");
+  if (!token) return;
+
+  async function fetchRooms() {
+    try {
+      const response = await fetch(
+        "http://localhost:5000/api/rooms/my-rooms",
+        {
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+        }
+      );
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.message || "Failed to fetch rooms");
+      }
+
+      const formattedRooms = data.rooms.map((room) => {
+        const ownerId = room.owner && typeof room.owner === "object"
+          ? room.owner._id ?? room.owner.id ?? room.owner
+          : room.owner;
+
+        return {
+          id: String(room._id),
+          name: room.name,
+          inviteCode: room.inviteCode,
+          role:
+            String(ownerId) === String(currentUser?.id)
+              ? "owner"
+              : "member",
+          memberCount: room.members?.length || 1,
+        };
+      });
+
+      setRooms(formattedRooms);
+    } catch (error) {
+      console.error("Fetching rooms failed:", error);
+    }
+  }
+
+  fetchRooms();
+}, [authStatus, currentUser]);
+
+async function createRoom(name) {
+  const token = sessionStorage.getItem("token");
+  if (!token) {
+    throw new Error("You must be logged in to create a room.");
+  }
+
+  const response = await fetch("http://localhost:5000/api/rooms", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({ name }),
+  });
+  const data = await response.json();
+
+  if (!response.ok) {
+    throw new Error(data.message || "Failed to create room.");
+  }
+
+  if (!data.room?._id) {
+    throw new Error("The server returned an invalid room.");
+  }
+
+  const createdRoom = {
+    id: String(data.room._id),
+    name: data.room.name,
+    inviteCode: data.room.inviteCode,
+    role: "owner",
+    memberCount: data.room.members?.length || 1,
+  };
+
+  setRooms((previousRooms) => [
+    createdRoom,
+    ...previousRooms.filter((room) => room.id !== createdRoom.id),
+  ]);
+
+  return createdRoom;
+}
+
+async function joinRoom(invitation) {
+  const value = invitation.trim();
+  let inviteCode = value;
+
+  try {
+    const invitationUrl = new URL(value);
+    inviteCode = invitationUrl.searchParams.get("inviteCode") || "";
+  } catch {
+    // A plain invitation code is accepted in addition to a copied link.
+  }
+
+  if (!inviteCode) {
+    throw new Error("Enter a valid room invitation code or link.");
+  }
+
+  const token = sessionStorage.getItem("token");
+  if (!token) {
+    throw new Error("You must be logged in to join a room.");
+  }
+
+  const response = await fetch("http://localhost:5000/api/rooms/join", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({ inviteCode }),
+  });
+  const data = await response.json();
+
+  if (!response.ok) {
+    throw new Error(data.message || "Failed to join room.");
+  }
+
+  if (!data.room?._id) {
+    throw new Error("The server returned an invalid room.");
+  }
+
+  const ownerId = data.room.owner && typeof data.room.owner === "object"
+    ? data.room.owner._id ?? data.room.owner.id ?? data.room.owner
+    : data.room.owner;
+  const joinedRoom = {
+    id: String(data.room._id),
+    name: data.room.name,
+    role: String(ownerId) === String(currentUser?.id) ? "owner" : "member",
+    memberCount: data.room.members?.length || 1,
+  };
+
+  setRooms((previousRooms) => [
+    joinedRoom,
+    ...previousRooms.filter((room) => room.id !== joinedRoom.id),
+  ]);
+}
+
+async function copyRoomInvite(room) {
+  if (!room.inviteCode) {
+    throw new Error("The invitation is unavailable. Refresh your room list and try again.");
+  }
+
+  const inviteUrl = new URL("/dashboard-preview", window.location.origin);
+  inviteUrl.searchParams.set("inviteCode", room.inviteCode);
+  if (!navigator.clipboard?.writeText) {
+    throw new Error("Clipboard access is unavailable in this browser.");
+  }
+
+  await navigator.clipboard.writeText(inviteUrl.toString());
+}
 
   function getInitialBoardState() {
   try {
     const saved = localStorage.getItem("sanctum-board");
 
     if (saved) {
-      return JSON.parse(saved);
+      return normalizeBoardState(JSON.parse(saved));
     }
   } catch (error) {
     console.error("Failed to load saved board:", error);
   }
 
-  return {
-    notes: [],
-    strokes: [],
-    shapes: [],
-    textItems: [],
-  };
+  return normalizeBoardState(null);
 }
  
   const [draggingNote,setDraggingNote]=useState(null)
  const boardHistory = useHistory(getInitialBoardState());
   const boardStateRef = useRef(boardHistory.state);
   const updateHistory = boardHistory.update;
+ const resetBoardHistory = boardHistory.reset;
   const { notes, strokes, shapes, textItems } = boardHistory.state
   const updateCollection = useCallback((key, nextValue, record = true) => {
+    if (boardSessionRef.current.roomId && !boardSessionRef.current.ready) return;
     const update = record ? boardHistory.set : boardHistory.update
     const previousState = boardStateRef.current
     const previousCollection = previousState[key]
@@ -150,8 +364,8 @@ useEffect(() => {
 
     boardStateRef.current = nextState
     update(nextState)
-    emitCollectionChanges(key, previousCollection, nextCollection)
-  }, [boardHistory.set, boardHistory.update])
+    emitCollectionChanges(key, previousCollection, nextCollection, emitBoardEvent)
+  }, [boardHistory.set, boardHistory.update, emitBoardEvent])
   const setNotes = useCallback((nextNotes) => updateCollection("notes", nextNotes), [updateCollection])
   const setShapes = useCallback((nextShapes) => updateCollection("shapes", nextShapes), [updateCollection])
   const setStrokes = useCallback((nextStrokes) => updateCollection("strokes", nextStrokes), [updateCollection])
@@ -162,6 +376,8 @@ useEffect(() => {
   const updateTextItems = useCallback((nextTextItems) => updateCollection("textItems", nextTextItems, false), [updateCollection])
   const [remoteCursors, setRemoteCursors] = useState({});
   useEffect(() => {
+    if (authStatus !== "authenticated") return;
+
     function applyRemoteChange(collection, updateItems) {
       const previousState = boardStateRef.current;
       const previousItems = previousState[collection];
@@ -224,16 +440,31 @@ useEffect(() => {
     }
 
     function handleBoardState(snapshot) {
-      if (
-        !snapshot ||
-        !BOARD_COLLECTIONS.every((collection) => Array.isArray(snapshot[collection]))
-      ) {
-        console.error("Received invalid board state from server");
+      const isRoomSnapshot =
+        snapshot &&
+        typeof snapshot === "object" &&
+        Object.prototype.hasOwnProperty.call(snapshot, "roomId");
+
+      if (boardRoomId) {
+        if (
+          !isRoomSnapshot ||
+          snapshot.roomId !== boardRoomId ||
+          snapshot.requestId !== boardSessionRef.current.requestId ||
+          boardSessionRef.current.roomId !== boardRoomId
+        ) {
+          return;
+        }
+        snapshot = snapshot.boardState;
+      } else if (isRoomSnapshot) {
         return;
       }
 
-      boardStateRef.current = snapshot;
-      updateHistory(snapshot);
+      const boardState = normalizeBoardState(snapshot);
+
+      boardStateRef.current = boardState;
+      boardSessionRef.current.ready = true;
+      resetBoardHistory(boardState);
+      setReadyBoardLocationKey(location.key);
     }
 
     function handleBoardClear() {
@@ -249,12 +480,35 @@ useEffect(() => {
 
     function handleConnect() {
       console.log("Connected to server:", socket.id);
-      socket.emit("board:join", boardStateRef.current);
+      if (boardRoomId) {
+        boardSessionRef.current.ready = false;
+        setReadyBoardLocationKey(null);
+        const requestId = `${socket.id}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+        boardSessionRef.current.requestId = requestId;
+        socket.emit("board:join", { roomId: boardRoomId, requestId });
+      } else {
+        boardSessionRef.current.ready = true;
+        setReadyBoardLocationKey(location.key);
+        socket.emit("board:join", boardStateRef.current);
+      }
+    }
+
+    function handleConnectionError(error) {
+      console.error("Socket connection failed:", error.message);
+    }
+
+    function handleBoardJoinError(error) {
+      console.error("Unable to join board room:", error?.message || "Unknown error");
     }
 
     function handleDisconnect() {
       console.log("Disconnected from server");
       setRemoteCursors({});
+      if (boardRoomId) {
+        boardSessionRef.current.ready = false;
+        boardSessionRef.current.requestId = null;
+        setReadyBoardLocationKey(null);
+      }
     }
 
     function handleCursorUpdate(position) {
@@ -293,6 +547,8 @@ useEffect(() => {
     socket.on("cursor:update", handleCursorUpdate);
     socket.on("cursor:remove", handleCursorRemove);
     socket.on("connect", handleConnect);
+    socket.on("connect_error", handleConnectionError);
+    socket.on("board:join:error", handleBoardJoinError);
     socket.on("disconnect", handleDisconnect);
     socket.on("board:state", handleBoardState);
     socket.on("board:object:create", handleRemoteCreate);
@@ -306,6 +562,8 @@ useEffect(() => {
 
   return () => {
       socket.off("connect", handleConnect);
+      socket.off("connect_error", handleConnectionError);
+      socket.off("board:join:error", handleBoardJoinError);
       socket.off("disconnect", handleDisconnect);
       socket.off("board:state", handleBoardState);
       socket.off("board:object:create", handleRemoteCreate);
@@ -319,14 +577,21 @@ useEffect(() => {
       socket.off("cursor:remove", handleCursorRemove);
       socket.disconnect();
   };
-}, [updateHistory]);
+  }, [authStatus, boardRoomId, location.key, resetBoardHistory, updateHistory]);
   function applyHistoryAction(action) {
+    if (boardSessionRef.current.roomId && !boardSessionRef.current.ready) return;
     const previousState = boardStateRef.current;
     action();
     const nextState = boardHistory.getState();
     boardStateRef.current = nextState;
     for (const collection of BOARD_COLLECTIONS) {
-      emitCollectionChanges(collection, previousState[collection], nextState[collection], true);
+      emitCollectionChanges(
+        collection,
+        previousState[collection],
+        nextState[collection],
+        emitBoardEvent,
+        true
+      );
     }
   }
   const undo = () => applyHistoryAction(boardHistory.undo)
@@ -370,7 +635,7 @@ function applyViewport(nextPan, nextZoom, broadcast = true) {
   setZoom(viewport.zoom);
 
   if (broadcast) {
-    socket.emit("board:viewport", viewport);
+    emitBoardEvent("board:viewport", viewport);
   }
 }
 
@@ -507,6 +772,8 @@ function getObjectBounds(object) {
 
 
 useEffect(() => {
+  if (boardRoomId) return;
+
   setSaveStatus("Saving...");
 
   try {
@@ -520,7 +787,7 @@ useEffect(() => {
     console.error("Autosave failed:", error);
     setSaveStatus("Save failed");
   }
-}, [boardHistory.state]);
+}, [boardHistory.state, boardRoomId]);
 
 useEffect(() => {
   const canvas = canvasRef.current;
@@ -589,6 +856,7 @@ async function exportBoardAsPng() {
     )
   }
   function clearBoard() {
+    if (boardSessionRef.current.roomId && !boardSessionRef.current.ready) return;
     if (!window.confirm("Clear all canvas content? This can be undone.")) return;
 
     boardHistory.commitTransaction();
@@ -600,7 +868,7 @@ async function exportBoardAsPng() {
     };
     boardStateRef.current = emptyBoard;
     setBoardHistory(emptyBoard);
-    socket.emit("board:clear");
+    emitBoardEvent("board:clear");
     setSelectedObject(null);
     setDragStart(null);
     setDraggingNote(null);
@@ -610,6 +878,26 @@ async function exportBoardAsPng() {
   }
 return (
   <Routes>
+   <Route
+  path="/dashboard-preview"
+  element={
+    authStatus === "checking" ? null : authStatus !== "authenticated" ? (
+      <Navigate to="/login" replace />
+    ) : (
+      <Dashboard
+  rooms={rooms}
+  currentUser={currentUser}
+  onCreateRoom={createRoom}
+  onJoinRoom={joinRoom}
+  onInviteRoom={copyRoomInvite}
+  onOpenRoom={(room) => {
+      navigate(`/board/${encodeURIComponent(String(room.id))}`);
+  }}
+  onLogout={handleLogout}
+/>
+    )
+  }
+/>
     <Route
       path="/"
       element={(
@@ -623,14 +911,15 @@ return (
       path="/login"
       element={
         authStatus === "checking" ? null : authStatus === "authenticated" ? (
-          <Navigate to="/board" replace />
+          <Navigate to="/dashboard-preview" replace />
         ) : (
           <Login
             onSwitchToSignup={() => navigate("/signup")}
             onLoginSuccess={() => {
-              setCurrentUser(JSON.parse(localStorage.getItem("user") || "null"));
+              setRooms([]);
+              setCurrentUser(JSON.parse(sessionStorage.getItem("user") || "null"));
               setAuthStatus("authenticated");
-              navigate("/board", { replace: true });
+              navigate("/dashboard-preview", { replace: true });
             }}
           />
         )
@@ -640,14 +929,14 @@ return (
       path="/signup"
       element={
         authStatus === "checking" ? null : authStatus === "authenticated" ? (
-          <Navigate to="/board" replace />
+          <Navigate to="/dashboard-preview" replace />
         ) : (
           <Signup onSwitchToLogin={() => navigate("/login")} />
         )
       }
     />
     <Route
-      path="/board"
+      path="/board/:roomId?"
       element={
         authStatus === "checking" ? null : authStatus !== "authenticated" ? (
           <Navigate to="/login" replace />
@@ -671,6 +960,8 @@ return (
    
   }}
   onMouseDown={(e) => {
+    if (!boardReady) return;
+
     const handle = e.target.closest("[data-resize-handle]");
     if (handle && selectedObject) {
       const bounds = getObjectBounds(selectedObject);
@@ -686,6 +977,10 @@ return (
           mouseY,
         });
       }
+      return;
+    }
+
+    if (e.target.closest("aside, button, input, textarea, select, [contenteditable='true']")) {
       return;
     }
 
@@ -849,8 +1144,7 @@ if (clickedNote) {
   return;
 }
   if (activeTool !== "pen") return;
-  if (e.target.closest(".sticky-note")) return;
-      if (e.target.closest("textarea, button")) return;
+  if (e.target.closest(".sticky-note, .text-item")) return;
 const point = getCanvasPoint(e);
 
 const newStroke = {
@@ -865,12 +1159,14 @@ setIsDrawing(true);
 
 updateStrokes((prev) => [...prev, newStroke]);
 console.log("Sending drawing:", newStroke);
-socket.emit("board:stroke:start", {
+emitBoardEvent("board:stroke:start", {
   stroke: newStroke,
 });
 }}
   
 onMouseMove={(e) => {
+if (!boardReady) return;
+
 const { x, y } = getCanvasPoint(e);
 socket.emit("cursor:move", {
   x,
@@ -1010,12 +1306,16 @@ if (
   const { x, y } = getCanvasPoint(e);
   updateStrokes((prev) =>
     prev.filter((stroke) => {
-      const isNear = stroke.points.some((point) => {
-        const dx = point.x - x;
-        const dy = point.y - y;
-
-        return Math.sqrt(dx * dx + dy * dy) < 15 / zoom;
-      });
+      const threshold = 15 / zoom;
+      const isNear = stroke.points.some((point, index) =>
+        index === 0
+          ? Math.hypot(point.x - x, point.y - y) < threshold
+          : distanceToSegment(
+              { x, y },
+              stroke.points[index - 1],
+              point
+            ) < threshold
+      );
 
       return !isNear;
     })
@@ -1032,7 +1332,7 @@ updateStrokes((prev) => {
   );
   });
 console.log("Sending point");
-  socket.emit("board:stroke:point", {
+  emitBoardEvent("board:stroke:point", {
     strokeId: currentStrokeIdRef.current,
     point,
   });
@@ -1086,6 +1386,8 @@ console.log("Sending point");
 }}
 
   onMouseUp={()=>{
+    if (!boardReady) return;
+
     boardHistory.commitTransaction();
     setIsPanning(false);
     setDraggingText(null);
@@ -1093,6 +1395,13 @@ console.log("Sending point");
     setDraggingNote(null)
     currentStrokeIdRef.current = null;
     currentShapeIdRef.current = null;
+  }}
+  onPointerDown={(event) => {
+    if (!boardReady || event.button !== 0) return;
+    if (event.target.closest("aside, button, input, textarea, select, [contenteditable='true']")) {
+      return;
+    }
+    event.currentTarget.setPointerCapture(event.pointerId);
   }}
   >
     <div className='fixed left-5 top-32 z-10'>
@@ -1112,7 +1421,8 @@ console.log("Sending point");
   style={{
      transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
     transformOrigin: "0 0",
-  }}
+      visibility: boardReady ? "visible" : "hidden",
+    }}
 >  
     <DrawingLayer strokes={strokes} shapes={shapes} />
     {notes.map((note) => (
@@ -1120,23 +1430,13 @@ console.log("Sending point");
         key={note.id}
         note={note}
         onBeginDrag={() => {
+          if (activeTool !== "select") return;
           boardHistory.beginTransaction();
           setDraggingNote(note.id);
         }}
-        onTextMouseDown={(event) => {
+        onTextMouseDown={() => {
           if (activeTool === "select") {
-            event.preventDefault();
-            event.currentTarget.blur();
-            boardHistory.beginTransaction();
-            const { x: mouseX, y: mouseY } = getCanvasPoint(
-              event,
-              event.currentTarget.closest("main")
-            );
             setSelectedObject({ type: "note", id: note.id });
-            setDragStart({ mode: "move", mouseX, mouseY, object: note });
-          } else {
-            boardHistory.beginTransaction();
-            setDraggingNote(note.id);
           }
         }}
         onTextChange={(text) => setNotes((previous) =>
@@ -1161,22 +1461,15 @@ console.log("Sending point");
             entry.id === item.id ? { ...entry, text } : entry
           )
         )}
-        onMouseDown={(event) => {
+        onMouseDown={() => {
+          if (activeTool === "select") {
+            setSelectedObject({ type: "text", id: item.id });
+            return;
+          }
           boardHistory.beginTransaction();
           setDraggingText(item.id);
-          if (activeTool === "select") {
-            event.preventDefault();
-            event.currentTarget.blur();
-            const { x: mouseX, y: mouseY } = getCanvasPoint(
-              event,
-              event.currentTarget.closest("main")
-            );
-            setSelectedObject({ type: "text", id: item.id });
-            setDragStart({ mode: "move", mouseX, mouseY, object: item });
-          } else {
-            setSelectedObject(null);
-            setDragStart(null);
-          }
+          setSelectedObject(null);
+          setDragStart(null);
         }}
       />
     ))}

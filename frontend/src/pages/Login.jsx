@@ -28,8 +28,8 @@ async function handleSubmit(event) {
       throw new Error(data.message || "Login failed");
     }
 
-    localStorage.setItem("token", data.token);
-localStorage.setItem("user", JSON.stringify(data.user));
+    sessionStorage.setItem("token", data.token);
+    sessionStorage.setItem("user", JSON.stringify(data.user));
 
 onLoginSuccess();
   } catch (error) {

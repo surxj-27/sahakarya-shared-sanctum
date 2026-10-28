@@ -1,4 +1,4 @@
-import "./landing.css";
+import "./Landing.css";
 import KineticGrid from "./KineticGrid.jsx";
 
 /* ---------- Hand-drawn doodles ---------- */
