@@ -7,6 +7,9 @@ function Toolbar({
   onZoomIn,
   onZoomOut,
   zoom,
+  onFitView,
+  snappingEnabled,
+  onToggleSnapping,
 }) {  return (
     <aside className="board-toolbar" aria-label="Whiteboard tools">
       <div className="board-zoom-controls" aria-label="Canvas zoom">
@@ -30,6 +33,13 @@ function Toolbar({
         <span aria-hidden="true">−</span>
       </button>
       </div>
+      <button
+        onClick={onFitView}
+        className="board-tool-button board-fit-button"
+        title="Fit all board content in the canvas"
+      >
+        Fit view
+      </button>
       <div className="board-tool-list" role="group" aria-label="Select a tool">
       <button
   onClick={() => setActiveTool("select")}
@@ -74,6 +84,16 @@ function Toolbar({
 >
   Shape
 </button>
+      </div>
+      <div className="board-shape-tools" role="group" aria-label="Grid snapping">
+        <button
+          onClick={onToggleSnapping}
+          className={`board-tool-button ${snappingEnabled ? "is-active" : ""}`}
+          aria-pressed={snappingEnabled}
+          title="Snap moved notes and text to a 20-unit grid"
+        >
+          Snap {snappingEnabled ? "On" : "Off"}
+        </button>
       </div>
 {activeTool === "shape" && (
   <div className="board-shape-tools" role="group" aria-label="Shape type">

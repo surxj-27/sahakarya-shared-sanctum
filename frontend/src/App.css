@@ -11,7 +11,6 @@
   --board-serif: "Fraunces", Georgia, serif;
   --board-sans: "Karla", system-ui, sans-serif;
 }
-
 .board-header {
   position: relative;
   z-index: 20;
@@ -154,6 +153,47 @@
   white-space: nowrap;
 }
 
+.board-minimap {
+  position: absolute;
+  z-index: 15;
+  right: 18px;
+  bottom: 18px;
+  width: 220px;
+  padding: 8px;
+  border: 1px solid var(--board-line);
+  border-radius: 9px;
+  background: rgba(251, 247, 238, .97);
+  box-shadow: 0 5px 18px rgba(31, 29, 26, .14);
+  color: var(--board-ink);
+  font-family: var(--board-sans);
+}
+.board-minimap-heading {
+  padding: 0 2px 5px;
+  color: var(--board-soft-ink);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: .07em;
+  text-transform: uppercase;
+}
+.board-minimap-map {
+  display: block;
+  width: 100%;
+  height: auto;
+  overflow: hidden;
+  border: 1px solid rgba(31, 29, 26, .1);
+  border-radius: 5px;
+  background-color: #f7f6f2;
+  touch-action: none;
+  cursor: crosshair;
+}
+.minimap-viewport {
+  fill: rgba(106, 167, 216, .12);
+  stroke: #3979a8;
+  stroke-width: 1.5;
+  vector-effect: non-scaling-stroke;
+  cursor: move;
+}
+
 .board-layout {
   display: flex;
   width: 100%;
@@ -178,6 +218,7 @@
 .board-canvas.tool-eraser { cursor: cell; }
 .board-canvas.tool-hand { cursor: grab; }
 .board-canvas.tool-hand.is-panning { cursor: grabbing; }
+.board-canvas.is-panning { cursor: grabbing; }
 .board-canvas.tool-text { cursor: text; }
 
 .board-toolbar-dock {
@@ -257,6 +298,14 @@
   padding: 4px;
   font-size: 19px;
   text-align: center;
+}
+.board-fit-button {
+  border-color: var(--board-line);
+  background: white;
+  text-align: center;
+}
+.board-fit-button:hover {
+  border-color: var(--board-blue);
 }
 
 .sticky-note {
@@ -407,6 +456,11 @@
     border-top: 1px solid var(--board-line);
   }
   .board-header-button { min-height: 34px; padding: 6px 9px; font-size: 12px; }
+  .board-minimap {
+    right: 10px;
+    bottom: 10px;
+    width: 176px;
+  }
   .board-toolbar-dock {
     top: 10px;
     right: 10px;

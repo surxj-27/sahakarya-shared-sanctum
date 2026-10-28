@@ -18,6 +18,8 @@ import DrawingLayer from "./components/DrawingLayer"
 import StickyNote from "./components/StickyNote"
 import TextItem from "./components/TextItem"
 import SelectionOverlay from "./components/SelectionOverlay"
+import BoardMinimap from "./components/BoardMinimap"
+import { getContentBounds } from "./components/boardGeometry"
 import useHistory  from './hooks/useHistory'
 import Login from "./pages/Login";
 import Signup from "./pages/Signup";
@@ -26,6 +28,23 @@ import Dashboard from "./components/Dashboard";
 const BOARD_COLLECTIONS = ["notes", "strokes", "shapes", "textItems"];
 const MIN_ZOOM = 0.2;
 const MAX_ZOOM = 4;
+const GRID_SIZE = 20;
+
+function snapToGrid(value) {
+  return Math.round(value / GRID_SIZE) * GRID_SIZE;
+}
+
+function getCursorColor(identity) {
+  let hash = 2166136261;
+  for (let index = 0; index < identity.length; index += 1) {
+    hash = Math.imul(hash ^ identity.charCodeAt(index), 16777619);
+  }
+  const colorHash = hash >>> 0;
+  const hue = (colorHash % 360);
+  const saturation = 66 + ((colorHash >>> 9) % 19);
+  const lightness = 30 + ((colorHash >>> 17) % 12);
+  return `hsl(${hue} ${saturation}% ${lightness}%)`;
+}
 
 function normalizeBoardState(candidate) {
   const emptyBoard = {
@@ -526,6 +545,9 @@ async function copyRoomInvite(room) {
         [position.id]: {
           x: position.x,
           y: position.y,
+          userId: typeof position.userId === "string" && position.userId
+            ? position.userId
+            : null,
           displayName: typeof position.displayName === "string" && position.displayName.trim()
             ? position.displayName.trim()
             : "Collaborator",
@@ -607,14 +629,83 @@ const [lastMouse, setLastMouse] = useState({ x: 0, y: 0 });
 const [zoom, setZoom] = useState(1);
 const viewportRef = useRef({ pan, zoom });
 const [draggingText, setDraggingText] = useState(null);
+const objectDragOriginRef = useRef(null);
+const [snappingEnabled, setSnappingEnabled] = useState(true);
+const spacePressedRef = useRef(false);
 const [shapeType, setShapeType] = useState("rect");
 const [selectedObject, setSelectedObject] = useState(null);
 
 const [dragStart, setDragStart] = useState(null);
 const canvasRef = useRef(null);
+const [canvasSize, setCanvasSize] = useState({ width: 0, height: 0 });
 const [saveStatus, setSaveStatus] = useState("Saved");
 const currentStrokeIdRef = useRef(null);
 const currentShapeIdRef = useRef(null);
+
+useEffect(() => {
+  const canvas = canvasRef.current;
+  if (!canvas) return;
+
+  const updateCanvasSize = () => {
+    const nextSize = { width: canvas.clientWidth, height: canvas.clientHeight };
+    setCanvasSize((previous) =>
+      previous.width === nextSize.width && previous.height === nextSize.height
+        ? previous
+        : nextSize
+    );
+  };
+  const measurementFrame = window.requestAnimationFrame(updateCanvasSize);
+
+  if (typeof ResizeObserver === "undefined") {
+    window.addEventListener("resize", updateCanvasSize);
+    return () => {
+      window.cancelAnimationFrame(measurementFrame);
+      window.removeEventListener("resize", updateCanvasSize);
+    };
+  }
+
+  const observer = new ResizeObserver(updateCanvasSize);
+  observer.observe(canvas);
+  return () => {
+    window.cancelAnimationFrame(measurementFrame);
+    observer.disconnect();
+  };
+}, [authStatus, location.pathname]);
+
+useEffect(() => {
+  function shouldIgnoreSpace(event) {
+    if (!(event.target instanceof HTMLElement)) return false;
+    return event.target.isContentEditable ||
+      ["INPUT", "TEXTAREA", "SELECT"].includes(event.target.tagName) ||
+      Boolean(event.target.closest("button, a, [role='button']")) ||
+      ![document.body, document.documentElement].includes(event.target) &&
+        !event.target.closest(".board-canvas");
+  }
+
+  function handleKeyDown(event) {
+    if (event.code !== "Space" || shouldIgnoreSpace(event)) return;
+    spacePressedRef.current = true;
+    event.preventDefault();
+  }
+
+  function handleKeyUp(event) {
+    if (event.code === "Space") spacePressedRef.current = false;
+  }
+
+  function handleWindowBlur() {
+    spacePressedRef.current = false;
+    setIsPanning(false);
+  }
+
+  window.addEventListener("keydown", handleKeyDown);
+  window.addEventListener("keyup", handleKeyUp);
+  window.addEventListener("blur", handleWindowBlur);
+  return () => {
+    window.removeEventListener("keydown", handleKeyDown);
+    window.removeEventListener("keyup", handleKeyUp);
+    window.removeEventListener("blur", handleWindowBlur);
+  };
+}, []);
 
 function applyViewport(nextPan, nextZoom, broadcast = true) {
   if (
@@ -675,6 +766,43 @@ function zoomOut() {
   zoomAtCanvasCenter(viewportRef.current.zoom / 1.2);
 }
 
+function navigateMinimap(centerX, centerY) {
+  const canvas = canvasRef.current;
+  if (!canvas) return;
+  const { zoom: currentZoom } = viewportRef.current;
+  applyViewport({
+    x: canvas.clientWidth / 2 - centerX * currentZoom,
+    y: canvas.clientHeight / 2 - centerY * currentZoom,
+  }, currentZoom);
+}
+
+function fitBoardToView() {
+  const canvas = canvasRef.current;
+  if (!canvas) return;
+
+  const bounds = getContentBounds({ notes, textItems, strokes, shapes });
+  if (!bounds) {
+    applyViewport({ x: 0, y: 0 }, 1);
+    return;
+  }
+
+  const padding = 100;
+  const availableWidth = Math.max(1, canvas.clientWidth - padding * 2);
+  const availableHeight = Math.max(1, canvas.clientHeight - padding * 2);
+  const nextZoom = Math.min(
+    MAX_ZOOM,
+    availableWidth / Math.max(1, bounds.maxX - bounds.minX),
+    availableHeight / Math.max(1, bounds.maxY - bounds.minY)
+  );
+  const centerX = bounds.minX + (bounds.maxX - bounds.minX) / 2;
+  const centerY = bounds.minY + (bounds.maxY - bounds.minY) / 2;
+  applyViewport({
+    x: canvas.clientWidth / 2 - centerX * nextZoom,
+    y: canvas.clientHeight / 2 - centerY * nextZoom,
+  }, nextZoom);
+}
+
+
 useEffect(() => {
   function handleRemoteViewport(viewport) {
     if (
@@ -697,6 +825,17 @@ useEffect(() => {
 
 useEffect(() => {
   function handleKeyDown(e) {
+    if (
+      e.key === "Escape" &&
+      selectedObject?.type === "text" &&
+      e.target instanceof HTMLTextAreaElement &&
+      e.target.classList.contains("text-item")
+    ) {
+      e.preventDefault();
+      e.target.blur();
+      return;
+    }
+
     if (e.key !== "Delete" && e.key !== "Backspace") return;
     if (e.target instanceof HTMLElement &&
       (e.target.isContentEditable || ["INPUT", "TEXTAREA"].includes(e.target.tagName))) return;
@@ -962,6 +1101,16 @@ return (
   }}
   onMouseDown={(e) => {
     if (!boardReady) return;
+    if (
+      spacePressedRef.current &&
+      e.button === 0 &&
+      !e.target.closest("aside, button, input, textarea, select, [contenteditable='true'], .board-minimap")
+    ) {
+      e.preventDefault();
+      setIsPanning(true);
+      setLastMouse({ x: e.clientX, y: e.clientY });
+      return;
+    }
 
     const handle = e.target.closest("[data-resize-handle]");
     if (handle && selectedObject) {
@@ -981,7 +1130,7 @@ return (
       return;
     }
 
-    if (e.target.closest("aside, button, input, textarea, select, [contenteditable='true']")) {
+    if (e.target.closest("aside, button, input, textarea, select, [contenteditable='true'], .board-minimap")) {
       return;
     }
 
@@ -1174,6 +1323,20 @@ socket.emit("cursor:move", {
   y,
   displayName: currentUser?.name || "Collaborator",
 });
+
+if (isPanning) {
+  const dx = e.clientX - lastMouse.x;
+  const dy = e.clientY - lastMouse.y;
+  const currentViewport = viewportRef.current;
+
+  applyViewport({
+    x: currentViewport.pan.x + dx,
+    y: currentViewport.pan.y + dy,
+  }, currentViewport.zoom);
+
+  setLastMouse({ x: e.clientX, y: e.clientY });
+  return;
+}
   
 if (
   activeTool === "select" &&
@@ -1354,23 +1517,6 @@ console.log("Sending point");
   );
   return;
 }
-  if (isPanning) {
-  const dx = e.clientX - lastMouse.x;
-  const dy = e.clientY - lastMouse.y;
-  const currentViewport = viewportRef.current;
-
-  applyViewport({
-    x: currentViewport.pan.x + dx,
-    y: currentViewport.pan.y + dy,
-  }, currentViewport.zoom);
-
-  setLastMouse({
-    x: e.clientX,
-    y: e.clientY,
-  });
-
-  return;
-}
   if (draggingNote === null) return;
 
   updateNotes((prevNotes) =>
@@ -1389,6 +1535,27 @@ console.log("Sending point");
   onMouseUp={()=>{
     if (!boardReady) return;
 
+    const dragOrigin = objectDragOriginRef.current;
+    if (snappingEnabled && dragOrigin) {
+      const collection = dragOrigin.type === "note" ? "notes" : "textItems";
+      const draggedObject = boardStateRef.current[collection].find(
+        (item) => item.id === dragOrigin.id
+      );
+      if (
+        draggedObject &&
+        (draggedObject.x !== dragOrigin.x || draggedObject.y !== dragOrigin.y)
+      ) {
+        const x = snapToGrid(draggedObject.x);
+        const y = snapToGrid(draggedObject.y);
+        if (x !== draggedObject.x || y !== draggedObject.y) {
+          const updateObjects = dragOrigin.type === "note" ? updateNotes : updateTextItems;
+          updateObjects((previous) => previous.map((item) =>
+            item.id === dragOrigin.id ? { ...item, x, y } : item
+          ));
+        }
+      }
+    }
+    objectDragOriginRef.current = null;
     boardHistory.commitTransaction();
     setIsPanning(false);
     setDraggingText(null);
@@ -1399,7 +1566,7 @@ console.log("Sending point");
   }}
   onPointerDown={(event) => {
     if (!boardReady || event.button !== 0) return;
-    if (event.target.closest("aside, button, input, textarea, select, [contenteditable='true']")) {
+    if (event.target.closest("aside, button, input, textarea, select, [contenteditable='true'], .board-minimap")) {
       return;
     }
     event.currentTarget.setPointerCapture(event.pointerId);
@@ -1415,6 +1582,9 @@ console.log("Sending point");
   onZoomIn={zoomIn}
   onZoomOut={zoomOut}
   zoom={zoom}
+  onFitView={fitBoardToView}
+  snappingEnabled={snappingEnabled}
+  onToggleSnapping={() => setSnappingEnabled((enabled) => !enabled)}
 />
     </div>
     <div
@@ -1433,6 +1603,12 @@ console.log("Sending point");
         onBeginDrag={() => {
           if (activeTool !== "select") return;
           boardHistory.beginTransaction();
+          objectDragOriginRef.current = {
+            type: "note",
+            id: note.id,
+            x: note.x,
+            y: note.y,
+          };
           setDraggingNote(note.id);
         }}
         onTextMouseDown={() => {
@@ -1468,6 +1644,12 @@ console.log("Sending point");
             return;
           }
           boardHistory.beginTransaction();
+          objectDragOriginRef.current = {
+            type: "text",
+            id: item.id,
+            x: item.x,
+            y: item.y,
+          };
           setDraggingText(item.id);
           setSelectedObject(null);
           setDragStart(null);
@@ -1484,6 +1666,17 @@ console.log("Sending point");
       }
     />
     </div>
+    {canvasSize.width > 0 && canvasSize.height > 0 && (
+      <BoardMinimap
+        notes={notes}
+        textItems={textItems}
+        strokes={strokes}
+        shapes={shapes}
+        viewport={{ pan, zoom }}
+        canvasSize={canvasSize}
+        onNavigate={navigateMinimap}
+      />
+    )}
     {Object.entries(remoteCursors).map(([id, position]) => (
   <div
     key={id}
@@ -1494,8 +1687,8 @@ console.log("Sending point");
       transition: "left 50ms linear, top 50ms linear",
     }}
   >
-    <div className="board-cursor-dot" />
-    <span className="board-cursor-label">
+    <div className="board-cursor-dot" style={{ backgroundColor: getCursorColor(position.userId || id) }} />
+    <span className="board-cursor-label" style={{ backgroundColor: getCursorColor(position.userId || id) }}>
       {position.displayName || "Collaborator"}
     </span>
   </div>

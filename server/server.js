@@ -410,6 +410,7 @@ io.on("connection", (socket) => {
 
     broadcastToSocketBoardRoom(socket, "cursor:update", {
       id: socket.id,
+      userId: socket.data.userId,
       x: position.x,
       y: position.y,
       displayName,
