@@ -8,123 +8,99 @@ function Toolbar({
   onZoomOut,
   zoom,
 }) {  return (
-    <aside className="inline-flex max-h-[75vh] flex-col items-center gap-3 overflow-y-auto rounded-xl border border-white/10 bg-[#1c1d25] p-3">
+    <aside className="board-toolbar" aria-label="Whiteboard tools">
+      <div className="board-zoom-controls" aria-label="Canvas zoom">
       <button
         onClick={onZoomIn}
-        className="rounded-lg p-3 text-gray-300 hover:bg-white/10"
+        className="board-tool-button board-zoom-button"
         aria-label="Zoom in"
         title="Zoom in"
       >
-        +
+        <span aria-hidden="true">+</span>
       </button>
-      <span className="text-xs text-gray-400" aria-live="polite">
+      <span className="board-zoom-level" aria-live="polite">
         {Math.round(zoom * 100)}%
       </span>
       <button
         onClick={onZoomOut}
-        className="rounded-lg p-3 text-gray-300 hover:bg-white/10"
+        className="board-tool-button board-zoom-button"
         aria-label="Zoom out"
         title="Zoom out"
       >
-        -
+        <span aria-hidden="true">−</span>
       </button>
+      </div>
+      <div className="board-tool-list" role="group" aria-label="Select a tool">
       <button
   onClick={() => setActiveTool("select")}
-  className={`rounded-lg p-3 ${
-    activeTool === "select"
-      ? "bg-violet-600 text-white"
-      : "text-gray-300 hover:bg-white/10"
-  }`}
+  className={`board-tool-button ${activeTool === "select" ? "is-active" : ""}`}
+  aria-pressed={activeTool === "select"}
 >
   Select
 </button>
 <button
   onClick={() => setActiveTool("hand")}
-  className={`rounded-lg p-3 ${
-    activeTool === "hand"
-      ? "bg-violet-600 text-white"
-      : "text-gray-300 hover:bg-white/10"
-  }`}
+  className={`board-tool-button ${activeTool === "hand" ? "is-active" : ""}`}
+  aria-pressed={activeTool === "hand"}
 >
   Hand
 </button>
       <button
   onClick={() => setActiveTool("pen")}
-  className={`rounded-lg p-3 ${
-    activeTool === "pen"
-      ? "bg-violet-600 text-white"
-      : "text-gray-300 hover:bg-white/10"
-  }`}
+  className={`board-tool-button ${activeTool === "pen" ? "is-active" : ""}`}
+  aria-pressed={activeTool === "pen"}
 >
   Pen
 </button>
 <button
   onClick={() => setActiveTool("eraser")}
-  className={`rounded-lg p-3 ${
-    activeTool === "eraser"
-      ? "bg-violet-600 text-white"
-      : "text-gray-300 hover:bg-white/10"
-  }`}
+  className={`board-tool-button ${activeTool === "eraser" ? "is-active" : ""}`}
+  aria-pressed={activeTool === "eraser"}
 >
   Eraser
 </button>
-       <button onClick={onNoteClick} className="rounded-lg p-3 text-gray-300 hover:bg-white/10">Note</button>
+       <button onClick={onNoteClick} className="board-tool-button">Note</button>
 <button
   onClick={() => setActiveTool("text")}
-  className={`rounded-lg p-3 ${
-    activeTool === "text"
-      ? "bg-violet-600 text-white"
-      : "text-gray-300 hover:bg-white/10"
-  }`}
+  className={`board-tool-button ${activeTool === "text" ? "is-active" : ""}`}
+  aria-pressed={activeTool === "text"}
 >
   Text
 </button>
 <button
   onClick={() => setActiveTool("shape")}
-  className={`rounded-lg p-3 ${
-    activeTool === "shape"
-      ? "bg-violet-600 text-white"
-      : "text-gray-300 hover:bg-white/10"
-  }`}
+  className={`board-tool-button ${activeTool === "shape" ? "is-active" : ""}`}
+  aria-pressed={activeTool === "shape"}
 >
   Shape
 </button>
+      </div>
 {activeTool === "shape" && (
-  <>
+  <div className="board-shape-tools" role="group" aria-label="Shape type">
     <button
       onClick={() => setShapeType("rect")}
-      className={`rounded-lg p-3 ${
-        shapeType === "rect"
-          ? "bg-violet-600 text-white"
-          : "text-gray-300 hover:bg-white/10"
-      }`}
+      className={`board-tool-button ${shapeType === "rect" ? "is-active" : ""}`}
+      aria-pressed={shapeType === "rect"}
     >
       Rectangle
     </button>
 
     <button
       onClick={() => setShapeType("circle")}
-      className={`rounded-lg p-3 ${
-        shapeType === "circle"
-          ? "bg-violet-600 text-white"
-          : "text-gray-300 hover:bg-white/10"
-      }`}
+      className={`board-tool-button ${shapeType === "circle" ? "is-active" : ""}`}
+      aria-pressed={shapeType === "circle"}
     >
       Circle
     </button>
     <button
   onClick={() => setShapeType("arrow")}
-  className={`rounded-lg p-3 ${
-    shapeType === "arrow"
-      ? "bg-violet-600 text-white"
-      : "text-gray-300 hover:bg-white/10"
-  }`}
+  className={`board-tool-button ${shapeType === "arrow" ? "is-active" : ""}`}
+  aria-pressed={shapeType === "arrow"}
 >
   Arrow
 </button>
-  </>
+  </div>
 )}
-
     </aside>
   )
 }

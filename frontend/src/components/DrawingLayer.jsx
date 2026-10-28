@@ -6,7 +6,7 @@ function DrawingLayer({ strokes, shapes }) {
           key={stroke.id ?? index}
           points={stroke.points.map((point) => `${point.x},${point.y}`).join(" ")}
           fill="none"
-          stroke="white"
+          stroke="var(--board-ink)"
           strokeWidth="3"
           strokeLinecap="round"
           strokeLinejoin="round"
@@ -34,14 +34,14 @@ function DrawingLayer({ strokes, shapes }) {
                 y1={startY}
                 x2={endX}
                 y2={endY}
-                stroke="white"
+                stroke="var(--board-ink)"
                 strokeWidth="2"
                 strokeLinecap="round"
               />
               <polygon
                 points={`${endX},${endY} ${x1},${y1} ${x2},${y2}`}
-                fill="white"
-                stroke="white"
+                fill="var(--board-ink)"
+                stroke="var(--board-ink)"
                 strokeWidth="1"
                 strokeLinejoin="round"
               />
@@ -58,7 +58,7 @@ function DrawingLayer({ strokes, shapes }) {
               rx={shape.width / 2}
               ry={shape.height / 2}
               fill="transparent"
-              stroke="white"
+              stroke="var(--board-ink)"
               strokeWidth="2"
             />
           );
@@ -72,7 +72,7 @@ function DrawingLayer({ strokes, shapes }) {
             width={shape.width}
             height={shape.height}
             fill="transparent"
-            stroke="white"
+            stroke="var(--board-ink)"
             strokeWidth="2"
           />
         );

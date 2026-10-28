@@ -941,7 +941,7 @@ return (
         authStatus === "checking" ? null : authStatus !== "authenticated" ? (
           <Navigate to="/login" replace />
         ) : (
-          <>
+          <div className="board-layout">
 <Header
   undo={undo}
   redo={redo}
@@ -952,9 +952,10 @@ return (
   onExport={exportBoardAsPng}
   onLogout={handleLogout}
   user={currentUser}
+  roomName={rooms.find((room) => room.id === boardRoomId)?.name || (boardRoomId ? "Shared room" : "Personal board")}
 />
-  <main ref={canvasRef} className='relative h-[calc(100vh-70px)] bg-[#171820] overflow-hidden' style={{
-    backgroundImage:`radial-gradient(#383945 ${zoom}px,transparent ${zoom}px)`,
+  <main ref={canvasRef} className={`board-canvas tool-${activeTool}${isPanning ? " is-panning" : ""}`} style={{
+    backgroundImage:`radial-gradient(#d9d0c2 ${zoom}px,transparent ${zoom}px)`,
     backgroundSize:`${24 * zoom}px ${24 * zoom}px`,
     backgroundPosition:`${pan.x}px ${pan.y}px`,
    
@@ -1404,7 +1405,7 @@ console.log("Sending point");
     event.currentTarget.setPointerCapture(event.pointerId);
   }}
   >
-    <div className='fixed left-5 top-32 z-10'>
+    <div className="board-toolbar-dock">
 <Toolbar
   onNoteClick={createNote}
   activeTool={activeTool}
@@ -1493,15 +1494,15 @@ console.log("Sending point");
       transition: "left 50ms linear, top 50ms linear",
     }}
   >
-    <div className="h-3 w-3 rounded-full bg-pink-500" />
-    <span className="ml-2 rounded bg-pink-500 px-2 py-1 text-xs text-white">
+    <div className="board-cursor-dot" />
+    <span className="board-cursor-label">
       {position.displayName || "Collaborator"}
     </span>
   </div>
 ))}
   </main>
 
-  </>
+  </div>
         )
       }
     />

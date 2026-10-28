@@ -3,7 +3,7 @@ function SelectionOverlay({ bounds, canResize }) {
 
   return (
     <div
-      className="pointer-events-none absolute z-30 border border-violet-400/80"
+      className="board-selection pointer-events-none absolute z-30"
       style={{
         left: `${bounds.x}px`,
         top: `${bounds.y}px`,
@@ -15,7 +15,7 @@ function SelectionOverlay({ bounds, canResize }) {
         <span
           key={handle}
           data-resize-handle={handle}
-          className="pointer-events-auto absolute h-2.5 w-2.5 rounded-sm border border-violet-300 bg-[#171820] cursor-nwse-resize"
+          className="board-selection-handle pointer-events-auto absolute cursor-nwse-resize"
           style={{
             left: handle.includes("w") ? "-5px" : undefined,
             right: handle.includes("e") ? "-5px" : undefined,

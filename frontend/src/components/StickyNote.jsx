@@ -9,7 +9,7 @@ function StickyNote({
   return (
     <div
       onMouseDown={onBeginDrag}
-      className={`sticky-note absolute z-20 w-48 rounded-lg ${note.color} p-4 text-gray-900 shadow-lg`}
+      className={`sticky-note absolute z-20 ${note.color}`}
       style={{
         left: `${note.x}px`,
         top: `${note.y}px`,
@@ -24,11 +24,11 @@ function StickyNote({
         }}
         value={note.text}
         onChange={(event) => onTextChange(event.target.value)}
-        className="h-28 w-full resize-none bg-transparent text-gray-900 outline-none"
-        placeholder="Write something...."
+        className="sticky-note-text"
+        placeholder="Write something..."
       />
 
-      <div className="mb-2 flex gap-2">
+      <div className="sticky-note-controls" aria-label="Sticky note color">
         {[
           "bg-yellow-200",
           "bg-pink-300",
@@ -39,7 +39,10 @@ function StickyNote({
             key={color}
             onMouseDown={(event) => event.stopPropagation()}
             onClick={() => onColorChange(color)}
-            className={`h-5 w-5 rounded-full ${color}`}
+            className={`sticky-note-swatch ${color} ${note.color === color ? "is-selected" : ""}`}
+            aria-label={`Set note color to ${color.replace("bg-", "").replace("-", " ")}`}
+            title={`Set note color to ${color.replace("bg-", "").replace("-", " ")}`}
+            aria-pressed={note.color === color}
           />
         ))}
       </div>
@@ -47,7 +50,7 @@ function StickyNote({
       <button
         onMouseDown={(event) => event.stopPropagation()}
         onClick={onDelete}
-        className="mt-2 rounded bg-red-500 px-3 py-1 text-sm text-white hover:bg-red-600"
+        className="sticky-note-delete"
       >
         Delete
       </button>

@@ -8,7 +8,7 @@ function TextItem({ item, onMouseDown, onChange }) {
         onMouseDown(event);
       }}
       placeholder="Type here..."
-      className="text-item absolute z-20 min-w-40 resize bg-transparent text-white outline-none"
+      className="text-item absolute z-20 min-w-40 resize bg-transparent outline-none"
       style={{
         left: `${item.x}px`,
         top: `${item.y}px`,

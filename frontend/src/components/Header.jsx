@@ -1,17 +1,22 @@
-function Header({ undo, redo, canUndo, canRedo, onAllClear, saveStatus ,onExport,onLogout,user}) {
+function Header({ undo, redo, canUndo, canRedo, onAllClear, saveStatus, onExport, onLogout, user, roomName }) {
   return (
-    <header className="header flex-h-[70px] flex-col-reverse items-center justify-between border-b border-white/10 bg-[#1c1d25] px-6 text-white">
-      <h2 className="text-lg font-bold tracking-tight"> The Sahakarya</h2>
-      <div className="rounded-md border border-white/10 bg-white/5 px-3 py-2 text-sm text-grey-300"> Untitle board</div>
-      <div className="text-sm text-gray-400">
-  {saveStatus === "Saving..." ? "⏳ Saving..." :
-   saveStatus === "Saved" ? "✓ Saved" :
-   "⚠ Save failed"}
-</div>
+    <header className="board-header">
+      <div className="board-header-identity">
+        <div className="board-brand-mark" aria-hidden="true">S</div>
+        <div className="board-room-heading">
+          <span className="board-brand-name">The Shared Sanctum</span>
+          <h1>{roomName || "Your canvas"}</h1>
+        </div>
+      </div>
+      <div className={`board-save-status ${saveStatus === "Saved" ? "is-saved" : saveStatus === "Saving..." ? "is-saving" : "is-error"}`} role="status">
+        <span className="board-status-dot" aria-hidden="true" />
+        {saveStatus === "Saving..." ? "Saving changes" : saveStatus === "Saved" ? "All changes saved" : "Save failed"}
+      </div>
+      <div className="board-header-actions">
       <button
   onClick={undo}
   disabled={!canUndo}
-  className="rounded-lg px-3 py-2 text-sm text-gray-300 hover:bg-white/10 disabled:opacity-30"
+  className="board-header-button"
 >
   Undo
 </button>
@@ -19,40 +24,40 @@ function Header({ undo, redo, canUndo, canRedo, onAllClear, saveStatus ,onExport
 <button
   onClick={redo}
   disabled={!canRedo}
-  className="rounded-lg px-3 py-2 text-sm text-gray-300 hover:bg-white/10 disabled:opacity-30"
+  className="board-header-button"
 >
   Redo
 </button>
 <button
   onClick={onAllClear}
-  className="rounded-lg px-3 py-2 text-sm text-red-300 hover:bg-red-500/10"
+  className="board-header-button board-clear-button"
 >
   All Clear
 </button>
 
 <button
   onClick={onExport}
-  className="rounded-lg bg-violet-600 px-5 py-2 text-sm font-medium text-white hover:bg-violet-500"
+  className="board-header-button board-export-button"
 >
   Export PNG
 </button>
 
-      <button className="rounded-lg bg-violet-600 px-5 py-2 text-sm font-medium transition hover:bg-voilet-500"> Invite</button>
+      <button className="board-header-button board-invite-button">Invite</button>
       <button
   onClick={onLogout}
-  className="rounded-lg bg-red-600 px-4 py-2 text-white hover:bg-red-500"
+  className="board-header-button board-logout-button"
 >
   Logout
 </button>
-<div>
+      </div>
+<div className="board-user">
 {user && (
-  <div className="text-sm text-gray-300">
-    <p>{user.name}</p>
-    <p className="text-xs text-gray-400">{user.email}</p>
+  <div>
+    <p className="board-user-name">{user.name}</p>
+    <p className="board-user-email">{user.email}</p>
   </div>
 )}
 </div>
-
     </header>
   )
 }
