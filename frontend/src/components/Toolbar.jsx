@@ -10,6 +10,9 @@ function Toolbar({
   onFitView,
   snappingEnabled,
   onToggleSnapping,
+  timelineOpen,
+  onToggleTimeline,
+  timelineDisabled,
 }) {  return (
     <aside className="board-toolbar" aria-label="Whiteboard tools">
       <div className="board-zoom-controls" aria-label="Canvas zoom">
@@ -39,6 +42,15 @@ function Toolbar({
         title="Fit all board content in the canvas"
       >
         Fit view
+      </button>
+      <button
+        onClick={onToggleTimeline}
+        className={`board-tool-button board-fit-button ${timelineOpen ? "is-active" : ""}`}
+        aria-pressed={timelineOpen}
+        disabled={timelineDisabled}
+        title="View committed board revisions"
+      >
+        History
       </button>
       <div className="board-tool-list" role="group" aria-label="Select a tool">
       <button

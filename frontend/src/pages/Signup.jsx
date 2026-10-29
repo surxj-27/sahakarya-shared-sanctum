@@ -1,6 +1,7 @@
 
 import { useState } from "react";
 import AuthLayout from "../components/AuthLayout";
+import { API_URL } from "../config";
 
 function Signup({ onSwitchToLogin }) {
   const [name, setName] = useState("");
@@ -12,7 +13,7 @@ function Signup({ onSwitchToLogin }) {
 
     try {
       const response = await fetch(
-        "http://localhost:5000/api/auth/signup",
+        `${API_URL}/auth/signup`,
         {
           method: "POST",
           headers: {
