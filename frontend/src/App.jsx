@@ -7,10 +7,8 @@ import {
   useLocation,
 } from "react-router-dom";
 import socket from "./socket";
+import { API_URL } from "./config";
 import { toPng } from "html-to-image";
-import heroImg from './assets/hero.png'
-import reactLogo from './assets/react.svg'
-import viteLogo from './assets/vite.svg'
 import './App.css'
 import Header from "./components/Header"
 import Toolbar from "./components/Toolbar"
@@ -19,8 +17,16 @@ import StickyNote from "./components/StickyNote"
 import TextItem from "./components/TextItem"
 import SelectionOverlay from "./components/SelectionOverlay"
 import BoardMinimap from "./components/BoardMinimap"
+import RevisionTimeline from "./components/RevisionTimeline"
 import { getContentBounds } from "./components/boardGeometry"
 import useHistory  from './hooks/useHistory'
+import {
+  REVISION_HISTORY_VERSION,
+  createRevisionHistory,
+  getPersonalRevisionStorageKey,
+  loadPersonalRevisionData,
+  savePersonalRevisionData,
+} from "./revisions/revisionHistory"
 import Login from "./pages/Login";
 import Signup from "./pages/Signup";
 import Landing from "./components/Landing";
@@ -29,6 +35,20 @@ const BOARD_COLLECTIONS = ["notes", "strokes", "shapes", "textItems"];
 const MIN_ZOOM = 0.2;
 const MAX_ZOOM = 4;
 const GRID_SIZE = 20;
+
+function getCachedUser() {
+  const cachedUser = sessionStorage.getItem("user");
+  if (!cachedUser) return null;
+
+  try {
+    const user = JSON.parse(cachedUser);
+    return user && typeof user === "object" && !Array.isArray(user) ? user : null;
+  } catch (error) {
+    console.error("Cached user data could not be read:", error);
+    sessionStorage.removeItem("user");
+    return null;
+  }
+}
 
 function snapToGrid(value) {
   return Math.round(value / GRID_SIZE) * GRID_SIZE;
@@ -65,6 +85,11 @@ function normalizeBoardState(candidate) {
   );
 }
 
+function getPersonalBoardStorageKey(userId) {
+  const identity = userId ? encodeURIComponent(String(userId)) : "local";
+  return `sanctum-board:personal:${identity}`;
+}
+
 function distanceToSegment(point, start, end) {
   const dx = end.x - start.x;
   const dy = end.y - start.y;
@@ -83,6 +108,16 @@ function distanceToSegment(point, start, end) {
 
 function createBoardId() {
   return `${socket.id || "local"}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
+function describeBoardChange(previousState, nextState) {
+  const changedCollections = BOARD_COLLECTIONS.filter(
+    (collection) =>
+      JSON.stringify(previousState[collection]) !== JSON.stringify(nextState[collection])
+  );
+  return changedCollections.length
+    ? `Updated ${changedCollections.join(", ")}`
+    : null;
 }
 
 function emitCollectionChanges(collection, previous, next, emitBoardEvent, includeStrokeChanges = false) {
@@ -120,10 +155,33 @@ function App() {
   const navigate = useNavigate();
   const location = useLocation();
   const boardRoomId = location.pathname.match(/^\/board\/([^/]+)\/?$/)?.[1] || null;
+  const [authStatus, setAuthStatus] = useState(() =>
+    sessionStorage.getItem("token") ? "checking" : "unauthenticated"
+  );
+  const [currentUser, setCurrentUser] = useState(() =>
+    getCachedUser()
+  );
+  const revisionAuthorId = currentUser?.id ?? currentUser?._id ?? null;
+  const isPersonalBoard = !boardRoomId;
+  const revisionHistoryKey = boardRoomId || `personal:${revisionAuthorId || "local"}`;
+  const revisionHistoriesRef = useRef(new Map());
+  const roomRevisionSaveQueuesRef = useRef(new Map());
+  const roomRevisionLoadPromisesRef = useRef(new Map());
+  const restoreInProgressRef = useRef(false);
+  const pendingRoomRestoreRef = useRef(null);
+  const revisionTransactionStartRef = useRef(null);
+  const pendingTextRevisionIdsRef = useRef(new Set());
+  const [timelineState, setTimelineState] = useState({ boardKey: null, open: false });
+  const [timelineHistory, setTimelineHistory] = useState(null);
+  const [timelineLoadState, setTimelineLoadState] = useState({ boardKey: null, status: "idle" });
+  const timelineOpen =
+    timelineState.boardKey === revisionHistoryKey && timelineState.open;
   const boardSessionRef = useRef({ roomId: null, ready: false, requestId: null });
   const [readyBoardLocationKey, setReadyBoardLocationKey] = useState(null);
   const boardReady = !boardRoomId || readyBoardLocationKey === location.key;
   useLayoutEffect(() => {
+    revisionTransactionStartRef.current = null;
+    pendingRoomRestoreRef.current = null;
     boardSessionRef.current = {
       roomId: boardRoomId,
       ready: !boardRoomId,
@@ -135,12 +193,6 @@ function App() {
       socket.emit(eventName, ...args);
     }
   }, []);
-  const [authStatus, setAuthStatus] = useState(() =>
-    sessionStorage.getItem("token") ? "checking" : "unauthenticated"
-  );
-const [currentUser, setCurrentUser] = useState(() =>
-  JSON.parse(sessionStorage.getItem("user") || "null")
-);
 const [rooms, setRooms] = useState([]);
 function handleLogout() {
   sessionStorage.removeItem("token");
@@ -162,7 +214,7 @@ useEffect(() => {
   async function verifyToken() {
     try {
       const response = await fetch(
-        "http://localhost:5000/api/auth/profile",
+        `${API_URL}/auth/profile`,
         {
           headers: {
             Authorization: `Bearer ${token}`,
@@ -203,7 +255,7 @@ useEffect(() => {
   async function fetchRooms() {
     try {
       const response = await fetch(
-        "http://localhost:5000/api/rooms/my-rooms",
+        `${API_URL}/rooms/my-rooms`,
         {
           headers: {
             Authorization: `Bearer ${token}`,
@@ -249,7 +301,7 @@ async function createRoom(name) {
     throw new Error("You must be logged in to create a room.");
   }
 
-  const response = await fetch("http://localhost:5000/api/rooms", {
+  const response = await fetch(`${API_URL}/rooms`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -303,7 +355,7 @@ async function joinRoom(invitation) {
     throw new Error("You must be logged in to join a room.");
   }
 
-  const response = await fetch("http://localhost:5000/api/rooms/join", {
+  const response = await fetch(`${API_URL}/rooms/join`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -351,9 +403,9 @@ async function copyRoomInvite(room) {
   await navigator.clipboard.writeText(inviteUrl.toString());
 }
 
-  function getInitialBoardState() {
+  function getInitialBoardState(userId) {
   try {
-    const saved = localStorage.getItem("sanctum-board");
+    const saved = localStorage.getItem(getPersonalBoardStorageKey(userId));
 
     if (saved) {
       return normalizeBoardState(JSON.parse(saved));
@@ -366,12 +418,187 @@ async function copyRoomInvite(room) {
 }
  
   const [draggingNote,setDraggingNote]=useState(null)
- const boardHistory = useHistory(getInitialBoardState());
+ const boardHistory = useHistory(getInitialBoardState(revisionAuthorId));
+  const getBoardHistoryState = boardHistory.getState;
+  const beginBoardHistoryTransaction = boardHistory.beginTransaction;
+  const commitBoardHistoryTransaction = boardHistory.commitTransaction;
   const boardStateRef = useRef(boardHistory.state);
-  const updateHistory = boardHistory.update;
- const resetBoardHistory = boardHistory.reset;
+   const personalBoardUserIdRef = useRef(revisionAuthorId);
+   const updateHistory = boardHistory.update;
+  const resetBoardHistory = boardHistory.reset;
   const { notes, strokes, shapes, textItems } = boardHistory.state
-  const updateCollection = useCallback((key, nextValue, record = true) => {
+  useLayoutEffect(() => {
+    if (boardRoomId || personalBoardUserIdRef.current === revisionAuthorId) return;
+
+    personalBoardUserIdRef.current = revisionAuthorId;
+    const nextBoardState = getInitialBoardState(revisionAuthorId);
+    boardStateRef.current = nextBoardState;
+    revisionTransactionStartRef.current = null;
+    resetBoardHistory(nextBoardState);
+  }, [boardRoomId, resetBoardHistory, revisionAuthorId]);
+ const loadRoomRevisionHistory = useCallback(async (roomId) => {
+   const existing = revisionHistoriesRef.current.get(roomId);
+   if (existing) return existing;
+
+   const pending = roomRevisionLoadPromisesRef.current.get(roomId);
+   if (pending) return pending;
+
+   const loadPromise = (async () => {
+     const token = sessionStorage.getItem("token");
+     if (!token) throw new Error("Authentication is required to load room revisions.");
+
+     const response = await fetch(
+       `${API_URL}/rooms/${encodeURIComponent(roomId)}/revisions`,
+       { headers: { Authorization: `Bearer ${token}` } }
+     );
+     const revisionData = await response.json();
+     if (!response.ok) {
+       throw new Error(
+         revisionData.message || `Failed to fetch room revisions (HTTP ${response.status}).`
+       );
+     }
+     if (
+       !revisionData ||
+       !Array.isArray(revisionData.revisions) ||
+       revisionData.version !== REVISION_HISTORY_VERSION
+     ) {
+       throw new Error("The room revisions response has an unsupported format.");
+     }
+
+     const history = createRevisionHistory(revisionData);
+     revisionHistoriesRef.current.set(roomId, history);
+     if (boardSessionRef.current.roomId === roomId) setTimelineHistory(history);
+     console.info("Room revision history loaded", {
+       revisionCount: history.getRevisions().length,
+     });
+     return history;
+   })();
+
+   roomRevisionLoadPromisesRef.current.set(roomId, loadPromise);
+   try {
+     return await loadPromise;
+   } finally {
+     if (roomRevisionLoadPromisesRef.current.get(roomId) === loadPromise) {
+       roomRevisionLoadPromisesRef.current.delete(roomId);
+     }
+   }
+ }, []);
+ const toggleRevisionTimeline = useCallback(() => {
+    if (timelineOpen) {
+      setTimelineState({ boardKey: revisionHistoryKey, open: false });
+      return;
+    }
+
+    let history = revisionHistoriesRef.current.get(revisionHistoryKey);
+    if (!history && isPersonalBoard) {
+      history = createRevisionHistory(
+        loadPersonalRevisionData(getPersonalRevisionStorageKey(revisionAuthorId))
+      );
+      revisionHistoriesRef.current.set(revisionHistoryKey, history);
+    }
+    if (!history && !isPersonalBoard) {
+      setTimelineHistory(null);
+      setTimelineLoadState({ boardKey: revisionHistoryKey, status: "loading" });
+      setTimelineState({ boardKey: revisionHistoryKey, open: true });
+      loadRoomRevisionHistory(revisionHistoryKey)
+        .then((loadedHistory) => {
+          setTimelineHistory(loadedHistory);
+          setTimelineLoadState({ boardKey: revisionHistoryKey, status: "idle" });
+        })
+        .catch((error) => {
+          console.error("Room revision loading failed:", error);
+          setTimelineLoadState({ boardKey: revisionHistoryKey, status: "error" });
+        });
+      return;
+    }
+    if (!history) return;
+    setTimelineHistory(history);
+    setTimelineLoadState({ boardKey: revisionHistoryKey, status: "idle" });
+    setTimelineState({ boardKey: revisionHistoryKey, open: true });
+  }, [isPersonalBoard, loadRoomRevisionHistory, revisionAuthorId, revisionHistoryKey, timelineOpen]);
+  const recordBoardRevision = useCallback((changeDescription, snapshot = boardStateRef.current) => {
+    let revisionHistory = revisionHistoriesRef.current.get(revisionHistoryKey);
+    if (!revisionHistory && !isPersonalBoard) {
+      console.error("Room revision was not recorded because its history has not loaded.");
+      return;
+    }
+    if (!revisionHistory) {
+      const personalStorageKey = getPersonalRevisionStorageKey(revisionAuthorId);
+      revisionHistory = createRevisionHistory(
+        isPersonalBoard
+          ? loadPersonalRevisionData(personalStorageKey)
+          : null
+      );
+      revisionHistoriesRef.current.set(revisionHistoryKey, revisionHistory);
+    }
+    const revision = revisionHistory.createRevision(snapshot, {
+      authorId: revisionAuthorId,
+      authorName: currentUser?.name ?? null,
+      changeDescription,
+    });
+    console.info("Board revision created", {
+      scope: isPersonalBoard ? "personal" : "room",
+      revisionCount: revisionHistory.getRevisions().length,
+    });
+    if (isPersonalBoard) {
+      savePersonalRevisionData(
+        getPersonalRevisionStorageKey(revisionAuthorId),
+        revisionHistory.toJSON()
+      );
+      console.info("Personal revision history saved", {
+        revisionCount: revisionHistory.getRevisions().length,
+      });
+      return;
+    }
+
+    const previousSave = roomRevisionSaveQueuesRef.current.get(revisionHistoryKey) || Promise.resolve();
+    const nextSave = previousSave.catch(() => {}).then(async () => {
+      const token = sessionStorage.getItem("token");
+      if (!token) throw new Error("Authentication is required to save room revisions.");
+
+      const response = await fetch(
+        `${API_URL}/rooms/${encodeURIComponent(revisionHistoryKey)}/revisions`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify(revision),
+        }
+      );
+      const result = await response.json();
+      if (!response.ok) {
+        throw new Error(
+          result.message || `Failed to save room revision (HTTP ${response.status}).`
+        );
+      }
+      console.info("Room revision saved");
+    });
+    roomRevisionSaveQueuesRef.current.set(revisionHistoryKey, nextSave);
+    nextSave.catch((error) => {
+      console.error("Room revision persistence failed:", error);
+    });
+  }, [currentUser?.name, isPersonalBoard, revisionAuthorId, revisionHistoryKey]);
+  const beginBoardTransaction = useCallback(() => {
+    if (revisionTransactionStartRef.current === null) {
+      revisionTransactionStartRef.current = getBoardHistoryState();
+    }
+    beginBoardHistoryTransaction();
+  }, [beginBoardHistoryTransaction, getBoardHistoryState]);
+  const commitBoardTransaction = useCallback(() => {
+    const startingState = revisionTransactionStartRef.current;
+    commitBoardHistoryTransaction();
+    revisionTransactionStartRef.current = null;
+    const nextState = getBoardHistoryState();
+    const description = startingState
+      ? describeBoardChange(startingState, nextState)
+      : null;
+    if (description) {
+      recordBoardRevision(description, nextState);
+    }
+  }, [commitBoardHistoryTransaction, getBoardHistoryState, recordBoardRevision]);
+  const updateCollection = useCallback((key, nextValue, record = true, revisionOptions = {}) => {
     if (boardSessionRef.current.roomId && !boardSessionRef.current.ready) return;
     const update = record ? boardHistory.set : boardHistory.update
     const previousState = boardStateRef.current
@@ -384,7 +611,14 @@ async function copyRoomInvite(room) {
     boardStateRef.current = nextState
     update(nextState)
     emitCollectionChanges(key, previousCollection, nextCollection, emitBoardEvent)
-  }, [boardHistory.set, boardHistory.update, emitBoardEvent])
+    if (
+      record &&
+      revisionOptions.recordRevision !== false &&
+      JSON.stringify(previousCollection) !== JSON.stringify(nextCollection)
+    ) {
+      recordBoardRevision(revisionOptions.description || `Updated ${key}`, nextState);
+    }
+  }, [boardHistory.set, boardHistory.update, emitBoardEvent, recordBoardRevision])
   const setNotes = useCallback((nextNotes) => updateCollection("notes", nextNotes), [updateCollection])
   const setShapes = useCallback((nextShapes) => updateCollection("shapes", nextShapes), [updateCollection])
   const setStrokes = useCallback((nextStrokes) => updateCollection("strokes", nextStrokes), [updateCollection])
@@ -458,7 +692,65 @@ async function copyRoomInvite(room) {
       }
     }
 
-    function handleBoardState(snapshot) {
+    async function handleRemoteRestore(operation) {
+      if (
+        !boardRoomId ||
+        operation?.roomId !== boardRoomId ||
+        boardSessionRef.current.roomId !== boardRoomId
+      ) {
+        return;
+      }
+
+      if (!boardSessionRef.current.ready) {
+        pendingRoomRestoreRef.current = operation;
+        console.info("Queued room restore until board initialization completes", {
+          roomId: boardRoomId,
+          revisionId: operation.revision?.revisionId,
+        });
+        return;
+      }
+
+      const restoredState = normalizeBoardState(operation.boardState);
+      boardStateRef.current = restoredState;
+      updateHistory(restoredState);
+
+      try {
+        const token = sessionStorage.getItem("token");
+        if (!token) throw new Error("Authentication is required to refresh room revisions.");
+
+        const response = await fetch(
+          `${API_URL}/rooms/${encodeURIComponent(boardRoomId)}/revisions`,
+          { headers: { Authorization: ["Bearer", token].join(" ") } }
+        );
+        const revisionData = await response.json();
+        if (
+          !response.ok ||
+          revisionData?.version !== REVISION_HISTORY_VERSION ||
+          !Array.isArray(revisionData.revisions)
+        ) {
+          throw new Error(revisionData?.message || "Failed to refresh room revisions.");
+        }
+        if (boardSessionRef.current.roomId !== boardRoomId) return;
+
+        const currentHistory = revisionHistoriesRef.current.get(boardRoomId);
+        const revisionsById = new Map(
+          revisionData.revisions.map((revision) => [revision.revisionId, revision])
+        );
+        currentHistory?.getRevisions().forEach((revision) => {
+          revisionsById.set(revision.revisionId, revision);
+        });
+        const history = createRevisionHistory({
+          ...revisionData,
+          revisions: [...revisionsById.values()],
+        });
+        revisionHistoriesRef.current.set(boardRoomId, history);
+        setTimelineHistory(history);
+      } catch (error) {
+        console.error("Failed to refresh room revision history after a restore:", error);
+      }
+    }
+
+    async function handleBoardState(snapshot) {
       const isRoomSnapshot =
         snapshot &&
         typeof snapshot === "object" &&
@@ -479,11 +771,64 @@ async function copyRoomInvite(room) {
       }
 
       const boardState = normalizeBoardState(snapshot);
+      if (boardRoomId) {
+        const roomId = boardRoomId;
+        const requestId = boardSessionRef.current.requestId;
+        try {
+          const token = sessionStorage.getItem("token");
+          if (!token) throw new Error("Authentication is required to load room revisions.");
+
+          const response = await fetch(
+            `${API_URL}/rooms/${encodeURIComponent(roomId)}/revisions`,
+            { headers: { Authorization: `Bearer ${token}` } }
+          );
+          const revisionData = await response.json();
+          if (!response.ok) {
+            throw new Error(revisionData.message || "Failed to fetch room revisions.");
+          }
+          if (
+            !revisionData ||
+            revisionData.version !== REVISION_HISTORY_VERSION ||
+            !Array.isArray(revisionData.revisions)
+          ) {
+            throw new Error("The room revisions response has an unsupported format.");
+          }
+          if (
+            boardSessionRef.current.roomId !== roomId ||
+            boardSessionRef.current.requestId !== requestId
+          ) {
+            return;
+          }
+          revisionHistoriesRef.current.set(roomId, createRevisionHistory(revisionData));
+          console.info("Room revision history loaded", {
+            revisionCount: revisionData.revisions.length,
+          });
+        } catch (error) {
+          console.error("Room revision loading failed:", error);
+        }
+
+        if (
+          boardSessionRef.current.roomId !== roomId ||
+          boardSessionRef.current.requestId !== requestId
+        ) {
+          return;
+        }
+      }
 
       boardStateRef.current = boardState;
+      revisionTransactionStartRef.current = null;
+      pendingTextRevisionIdsRef.current.clear();
       boardSessionRef.current.ready = true;
+      if (boardRoomId) {
+        setTimelineHistory(revisionHistoriesRef.current.get(boardRoomId) || null);
+      }
       resetBoardHistory(boardState);
       setReadyBoardLocationKey(location.key);
+      const pendingRestore = pendingRoomRestoreRef.current;
+      if (pendingRestore?.roomId === boardRoomId) {
+        pendingRoomRestoreRef.current = null;
+        void handleRemoteRestore(pendingRestore);
+      }
     }
 
     function handleBoardClear() {
@@ -573,6 +918,7 @@ async function copyRoomInvite(room) {
     socket.on("board:join:error", handleBoardJoinError);
     socket.on("disconnect", handleDisconnect);
     socket.on("board:state", handleBoardState);
+    socket.on("board:restore", handleRemoteRestore);
     socket.on("board:object:create", handleRemoteCreate);
     socket.on("board:object:update", handleRemoteUpdate);
     socket.on("board:object:delete", handleRemoteDelete);
@@ -588,6 +934,7 @@ async function copyRoomInvite(room) {
       socket.off("board:join:error", handleBoardJoinError);
       socket.off("disconnect", handleDisconnect);
       socket.off("board:state", handleBoardState);
+      socket.off("board:restore", handleRemoteRestore);
       socket.off("board:object:create", handleRemoteCreate);
       socket.off("board:object:update", handleRemoteUpdate);
       socket.off("board:object:delete", handleRemoteDelete);
@@ -621,6 +968,153 @@ async function copyRoomInvite(room) {
   const canUndo=boardHistory.canUndo
   const canRedo=boardHistory.canRedo
   const setBoardHistory = boardHistory.set
+  const restoreRevision = useCallback(async (selectedRevision) => {
+    if (restoreInProgressRef.current) {
+      throw new Error("A restore is already in progress.");
+    }
+    if (boardSessionRef.current.roomId && !boardSessionRef.current.ready) {
+      throw new Error("Wait for the room board to finish loading before restoring.");
+    }
+
+    const revisionHistory = revisionHistoriesRef.current.get(revisionHistoryKey);
+    const sourceRevision = revisionHistory?.getRevisions().find(
+      (revision) => revision.revisionId === selectedRevision?.revisionId
+    );
+    if (!revisionHistory || !sourceRevision) {
+      throw new Error("The selected revision is no longer available.");
+    }
+
+    restoreInProgressRef.current = true;
+    const restoreRoomId = boardSessionRef.current.roomId;
+    const restoreRequestId = boardSessionRef.current.requestId;
+    let persistedRevision = null;
+    try {
+      const restoredState = JSON.parse(JSON.stringify(sourceRevision.snapshot));
+      console.info("Revision restore requested", {
+        revisionId: sourceRevision.revisionId,
+        roomId: restoreRoomId,
+        collectionCounts: Object.fromEntries(
+          BOARD_COLLECTIONS.map((collection) => [
+            collection,
+            restoredState[collection].length,
+          ])
+        ),
+      });
+      const revision = revisionHistory.prepareRevision(restoredState, {
+        authorId: revisionAuthorId,
+        authorName: currentUser?.name ?? null,
+        changeDescription: "Restored revision",
+      });
+
+      if (isPersonalBoard) {
+        const nextHistory = createRevisionHistory(revisionHistory.toJSON());
+        nextHistory.addRevision(revision);
+        const saved = savePersonalRevisionData(
+          getPersonalRevisionStorageKey(revisionAuthorId),
+          nextHistory.toJSON()
+        );
+        if (!saved) {
+          throw new Error("The restored revision could not be saved to this browser.");
+        }
+        try {
+          globalThis.localStorage.setItem(
+            getPersonalBoardStorageKey(revisionAuthorId),
+            JSON.stringify(restoredState)
+          );
+        } catch (error) {
+          const rolledBack = savePersonalRevisionData(
+            getPersonalRevisionStorageKey(revisionAuthorId),
+            revisionHistory.toJSON()
+          );
+          if (!rolledBack) {
+            console.error("Failed to roll back personal revision history after board save failure.");
+          }
+          throw new Error("The restored board could not be saved to this browser.", {
+            cause: error,
+          });
+        }
+      } else {
+        if (
+          boardSessionRef.current.roomId !== restoreRoomId ||
+          boardSessionRef.current.requestId !== restoreRequestId ||
+          !boardSessionRef.current.ready
+        ) {
+          throw new Error("The active room changed before the restore could be applied.");
+        }
+
+        if (!socket.connected) {
+          throw new Error("The room connection was lost before the board could be restored.");
+        }
+        const restoreResult = await new Promise((resolve, reject) => {
+          socket.timeout(10000).emit(
+            "board:restore",
+            { boardState: restoredState, revision },
+            (error, result) => {
+              if (error) {
+                console.error("Room restore acknowledgement timed out or failed", {
+                  roomId: restoreRoomId,
+                  revisionId: revision.revisionId,
+                  code: error.code,
+                  message: error.message,
+                });
+                reject(new Error(
+                  "No acknowledgement was received from the room server. The save outcome is unknown; reload the room before retrying."
+                ));
+              } else if (!result?.success) {
+                console.error("Room restore was rejected by the server", {
+                  roomId: restoreRoomId,
+                  revisionId: revision.revisionId,
+                  code: result?.code,
+                  status: result?.status,
+                  message: result?.message,
+                });
+                reject(new Error(
+                  result?.message
+                    ? `${result.code ? `${result.code}: ` : ""}${result.message}`
+                    : `Room restore failed${result?.status ? ` (HTTP ${result.status})` : ""}.`
+                ));
+              } else {
+                console.info("Room restore acknowledged by the server", {
+                  roomId: restoreRoomId,
+                  revisionId: result.revision?.revisionId,
+                });
+                resolve(result);
+              }
+            }
+          );
+        });
+        if (
+          !restoreResult?.success ||
+          boardSessionRef.current.roomId !== restoreRoomId ||
+          boardSessionRef.current.requestId !== restoreRequestId ||
+          !boardSessionRef.current.ready
+        ) {
+          throw new Error(
+            restoreResult?.message || "The active room changed before the restore completed."
+          );
+        }
+        persistedRevision = restoreResult.revision;
+      }
+
+      persistedRevision ??= revision;
+      revisionHistory.addRevision(persistedRevision);
+      boardStateRef.current = restoredState;
+      setBoardHistory(restoredState);
+      console.info("Board revision restored", {
+        scope: isPersonalBoard ? "personal" : "room",
+        revisionCount: revisionHistory.getRevisions().length,
+      });
+      return persistedRevision;
+    } finally {
+      restoreInProgressRef.current = false;
+    }
+  }, [
+    currentUser?.name,
+    isPersonalBoard,
+    revisionAuthorId,
+    revisionHistoryKey,
+    setBoardHistory,
+  ]);
   const [activeTool, setActiveTool] = useState("select");
   const [isDrawing, setIsDrawing] = useState(false);
 const [pan, setPan] = useState({ x: 0, y: 0 });
@@ -789,10 +1283,13 @@ function fitBoardToView() {
   const padding = 100;
   const availableWidth = Math.max(1, canvas.clientWidth - padding * 2);
   const availableHeight = Math.max(1, canvas.clientHeight - padding * 2);
-  const nextZoom = Math.min(
-    MAX_ZOOM,
+  const nextZoom = Math.max(
+    MIN_ZOOM,
+    Math.min(
+      MAX_ZOOM,
     availableWidth / Math.max(1, bounds.maxX - bounds.minX),
     availableHeight / Math.max(1, bounds.maxY - bounds.minY)
+    )
   );
   const centerX = bounds.minX + (bounds.maxX - bounds.minX) / 2;
   const centerY = bounds.minY + (bounds.maxY - bounds.minY) / 2;
@@ -917,7 +1414,7 @@ useEffect(() => {
 
   try {
     localStorage.setItem(
-      "sanctum-board",
+        getPersonalBoardStorageKey(revisionAuthorId),
       JSON.stringify(boardHistory.state)
     );
 
@@ -926,7 +1423,7 @@ useEffect(() => {
     console.error("Autosave failed:", error);
     setSaveStatus("Save failed");
   }
-}, [boardHistory.state, boardRoomId]);
+}, [boardHistory.state, boardRoomId, revisionAuthorId]);
 
 useEffect(() => {
   const canvas = canvasRef.current;
@@ -998,15 +1495,19 @@ async function exportBoardAsPng() {
     if (boardSessionRef.current.roomId && !boardSessionRef.current.ready) return;
     if (!window.confirm("Clear all canvas content? This can be undone.")) return;
 
-    boardHistory.commitTransaction();
+    commitBoardTransaction();
     const emptyBoard = {
       notes: [],
       strokes: [],
       shapes: [],
       textItems: [],
     };
+    const previousBoardState = boardStateRef.current;
     boardStateRef.current = emptyBoard;
     setBoardHistory(emptyBoard);
+    if (describeBoardChange(previousBoardState, emptyBoard)) {
+      recordBoardRevision("Cleared board", emptyBoard);
+    }
     emitBoardEvent("board:clear");
     setSelectedObject(null);
     setDragStart(null);
@@ -1015,6 +1516,10 @@ async function exportBoardAsPng() {
     setIsDrawing(false);
     setIsPanning(false);
   }
+const activeRoom = boardRoomId
+  ? rooms.find((room) => room.id === boardRoomId)
+  : null;
+
 return (
   <Routes>
    <Route
@@ -1056,7 +1561,7 @@ return (
             onSwitchToSignup={() => navigate("/signup")}
             onLoginSuccess={() => {
               setRooms([]);
-              setCurrentUser(JSON.parse(sessionStorage.getItem("user") || "null"));
+              setCurrentUser(getCachedUser());
               setAuthStatus("authenticated");
               navigate("/dashboard-preview", { replace: true });
             }}
@@ -1091,7 +1596,8 @@ return (
   onExport={exportBoardAsPng}
   onLogout={handleLogout}
   user={currentUser}
-  roomName={rooms.find((room) => room.id === boardRoomId)?.name || (boardRoomId ? "Shared room" : "Personal board")}
+  roomName={activeRoom?.name || (boardRoomId ? "Shared room" : "Personal board")}
+  onInviteRoom={activeRoom?.inviteCode ? () => copyRoomInvite(activeRoom) : undefined}
 />
   <main ref={canvasRef} className={`board-canvas tool-${activeTool}${isPanning ? " is-panning" : ""}`} style={{
     backgroundImage:`radial-gradient(#d9d0c2 ${zoom}px,transparent ${zoom}px)`,
@@ -1117,7 +1623,7 @@ return (
       const bounds = getObjectBounds(selectedObject);
       if (bounds) {
         e.preventDefault();
-        boardHistory.beginTransaction();
+        beginBoardTransaction();
         const { x: mouseX, y: mouseY } = getCanvasPoint(e);
         setDragStart({
           mode: "resize",
@@ -1153,7 +1659,7 @@ if (activeTool === "select") {
   );
 
 if (clickedNote) {
-  boardHistory.beginTransaction();
+  beginBoardTransaction();
   setSelectedObject({
     type: "note",
     id: clickedNote.id,
@@ -1200,7 +1706,7 @@ if (clickedNote) {
   });
 
   if (clickedShape) {
-    boardHistory.beginTransaction();
+    beginBoardTransaction();
     setSelectedObject({
       type: "shape",
       id: clickedShape.id,
@@ -1229,7 +1735,7 @@ if (clickedNote) {
     );
 
     if (clickedStroke) {
-      boardHistory.beginTransaction();
+      beginBoardTransaction();
       setSelectedObject({ type: "stroke", id: clickedStroke.id });
       setDragStart({ mode: "move", mouseX, mouseY, object: clickedStroke });
     } else {
@@ -1243,7 +1749,7 @@ if (clickedNote) {
 
 
     if (activeTool === "shape") {
-  boardHistory.beginTransaction();
+  beginBoardTransaction();
   const { x: startX, y: startY } = getCanvasPoint(e);
   const shapeId = createBoardId();
   currentShapeIdRef.current = shapeId;
@@ -1281,7 +1787,7 @@ if (clickedNote) {
   return;
 }
     if (activeTool === "eraser") {
-  boardHistory.beginTransaction();
+  beginBoardTransaction();
   setIsDrawing(true);
   return;
 }
@@ -1304,7 +1810,7 @@ const newStroke = {
 
 currentStrokeIdRef.current = newStroke.id;
 
-boardHistory.beginTransaction();
+beginBoardTransaction();
 setIsDrawing(true);
 
 updateStrokes((prev) => [...prev, newStroke]);
@@ -1556,7 +2062,7 @@ console.log("Sending point");
       }
     }
     objectDragOriginRef.current = null;
-    boardHistory.commitTransaction();
+    commitBoardTransaction();
     setIsPanning(false);
     setDraggingText(null);
     setIsDrawing(false)
@@ -1585,6 +2091,9 @@ console.log("Sending point");
   onFitView={fitBoardToView}
   snappingEnabled={snappingEnabled}
   onToggleSnapping={() => setSnappingEnabled((enabled) => !enabled)}
+  timelineOpen={timelineOpen}
+  onToggleTimeline={toggleRevisionTimeline}
+  timelineDisabled={!boardReady}
 />
     </div>
     <div
@@ -1602,7 +2111,7 @@ console.log("Sending point");
         note={note}
         onBeginDrag={() => {
           if (activeTool !== "select") return;
-          boardHistory.beginTransaction();
+          beginBoardTransaction();
           objectDragOriginRef.current = {
             type: "note",
             id: note.id,
@@ -1616,11 +2125,22 @@ console.log("Sending point");
             setSelectedObject({ type: "note", id: note.id });
           }
         }}
-        onTextChange={(text) => setNotes((previous) =>
-          previous.map((item) =>
-            item.id === note.id ? { ...item, text } : item
-          )
-        )}
+        onTextChange={(text) => {
+          const revisionKey = `note:${note.id}`;
+          if (!pendingTextRevisionIdsRef.current.has(revisionKey)) {
+            beginBoardTransaction();
+            pendingTextRevisionIdsRef.current.add(revisionKey);
+          }
+          updateCollection("notes", (previous) =>
+            previous.map((item) =>
+              item.id === note.id ? { ...item, text } : item
+            ), true, { recordRevision: false });
+        }}
+        onTextCommit={() => {
+          if (pendingTextRevisionIdsRef.current.delete(`note:${note.id}`)) {
+            commitBoardTransaction();
+          }
+        }}
         onColorChange={(color) => setNotes((previous) =>
           previous.map((item) =>
             item.id === note.id ? { ...item, color } : item
@@ -1633,17 +2153,42 @@ console.log("Sending point");
       <TextItem
         key={item.id}
         item={item}
-        onChange={(text) => setTextItems((previous) =>
-          previous.map((entry) =>
-            entry.id === item.id ? { ...entry, text } : entry
-          )
-        )}
-        onMouseDown={() => {
+        onChange={(text) => {
+          const revisionKey = `text:${item.id}`;
+          if (!pendingTextRevisionIdsRef.current.has(revisionKey)) {
+            beginBoardTransaction();
+            pendingTextRevisionIdsRef.current.add(revisionKey);
+          }
+          updateCollection("textItems", (previous) =>
+            previous.map((entry) =>
+              entry.id === item.id ? { ...entry, text } : entry
+            ), true, { recordRevision: false });
+        }}
+        onCommit={() => {
+          if (pendingTextRevisionIdsRef.current.delete(`text:${item.id}`)) {
+            commitBoardTransaction();
+          }
+        }}
+        onMouseDown={(event) => {
           if (activeTool === "select") {
+            beginBoardTransaction();
+            const { x, y } = getCanvasPoint(event);
+            objectDragOriginRef.current = {
+              type: "text",
+              id: item.id,
+              x: item.x,
+              y: item.y,
+            };
             setSelectedObject({ type: "text", id: item.id });
+            setDragStart({
+              mode: "move",
+              mouseX: x,
+              mouseY: y,
+              object: item,
+            });
             return;
           }
-          boardHistory.beginTransaction();
+          beginBoardTransaction();
           objectDragOriginRef.current = {
             type: "text",
             id: item.id,
@@ -1675,6 +2220,26 @@ console.log("Sending point");
         viewport={{ pan, zoom }}
         canvasSize={canvasSize}
         onNavigate={navigateMinimap}
+      />
+    )}
+    {timelineOpen && timelineHistory && (
+      <RevisionTimeline
+        key={revisionHistoryKey}
+        history={timelineHistory}
+        currentUser={currentUser}
+        onRestore={restoreRevision}
+        onClose={() => setTimelineState({ boardKey: revisionHistoryKey, open: false })}
+      />
+    )}
+    {timelineOpen && !timelineHistory && (
+      <RevisionTimeline
+        key={revisionHistoryKey}
+        loading={timelineLoadState.boardKey === revisionHistoryKey &&
+          timelineLoadState.status === "loading"}
+        loadError={timelineLoadState.boardKey === revisionHistoryKey &&
+          timelineLoadState.status === "error"}
+        currentUser={currentUser}
+        onClose={() => setTimelineState({ boardKey: revisionHistoryKey, open: false })}
       />
     )}
     {Object.entries(remoteCursors).map(([id, position]) => (

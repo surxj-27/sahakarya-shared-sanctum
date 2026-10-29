@@ -1,8 +1,9 @@
-function TextItem({ item, onMouseDown, onChange }) {
+function TextItem({ item, onMouseDown, onChange, onCommit }) {
   return (
     <textarea
       value={item.text}
       onChange={(event) => onChange(event.target.value)}
+      onBlur={onCommit}
       onMouseDown={(event) => {
         event.stopPropagation();
         onMouseDown(event);

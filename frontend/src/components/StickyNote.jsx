@@ -3,6 +3,7 @@ function StickyNote({
   onBeginDrag,
   onTextMouseDown,
   onTextChange,
+  onTextCommit,
   onColorChange,
   onDelete,
 }) {
@@ -24,6 +25,7 @@ function StickyNote({
         }}
         value={note.text}
         onChange={(event) => onTextChange(event.target.value)}
+        onBlur={onTextCommit}
         className="sticky-note-text"
         placeholder="Write something..."
       />

@@ -1,6 +1,7 @@
 
 import { useState } from "react";
 import AuthLayout from "../components/AuthLayout";
+import { API_URL } from "../config";
 
 function Login({ onSwitchToSignup, onLoginSuccess }) {
   const [email, setEmail] = useState("");
@@ -12,7 +13,7 @@ async function handleSubmit(event) {
 
   try {
     const response = await fetch(
-      "http://localhost:5000/api/auth/login",
+      `${API_URL}/auth/login`,
       {
         method: "POST",
         headers: {
